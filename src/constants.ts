@@ -10,5 +10,9 @@ export const NASH_LLM_SERVER_ENDPOINT =
   "http://localhost:8001/v1/chat/completions/stream";
 export const NASH_LLM_SUMMARIZE_ENDPOINT =
   "http://localhost:8001/v1/chat/summarize";
+export const NASH_MCP_ENDPOINT = "http://localhost:8001/v1/mcp";
+export const NASH_MCP_CALL_TOOL_ENDPOINT = `${NASH_MCP_ENDPOINT}/call_tool`;
 
 export const TERMS_OF_SERVICE_URL = 'https://1mcp.ai/terms-of-service.md';
+
+export const FUNCTION_CALL_MARKER = '<f';

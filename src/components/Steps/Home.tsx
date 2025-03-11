@@ -22,6 +22,8 @@ import { ChatContainer } from "../ui/chat-container";
 import {
   NASH_LLM_SERVER_ENDPOINT,
   NASH_LLM_SUMMARIZE_ENDPOINT,
+  NASH_MCP_ENDPOINT,
+  FUNCTION_CALL_MARKER,
 } from "../../constants";
 
 interface ChatMessage {
@@ -40,7 +42,8 @@ async function streamCompletion(
   messages: ChatMessage[],
   sessionId: string | null = null,
   model: string | null = null,
-  onChunk: (chunk: string, sessionId?: string) => void
+  onChunk: (chunk: string, sessionId?: string) => void,
+  onMessageUpdate?: (content: string) => void
 ) {
   const endpoint = NASH_LLM_SERVER_ENDPOINT;
 
@@ -69,6 +72,9 @@ async function streamCompletion(
   const reader = (response.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let currentMessage = "";
+  let foundFunctionCall = false;
+  let pendingContent = "";
 
   try {
     while (true) {
@@ -90,10 +96,35 @@ async function streamCompletion(
             if (parsed.session_id) {
               onChunk("", parsed.session_id);
             } else if (parsed.content) {
-              onChunk(parsed.content);
+              // Check if we've already found a function call
+              if (foundFunctionCall) continue;
+
+              // Add new content to pending buffer
+              pendingContent += parsed.content;
+
+              // Check for complete function call marker
+              if (pendingContent.includes("<function_call")) {
+                foundFunctionCall = true;
+                const markerIndex = pendingContent.indexOf("<function_call");
+                
+                // Get all content before the marker
+                const finalContent = currentMessage + pendingContent.substring(0, markerIndex).trim();
+                
+                if (finalContent) {
+                  onChunk(finalContent, undefined);
+                }
+                return;
+              }
+
+              // If we have a complete word/phrase (ends with space or punctuation)
+              if (/[.!?, ]$/.test(pendingContent)) {
+                currentMessage += pendingContent;
+                onChunk(pendingContent, undefined);
+                pendingContent = "";
+              }
             }
           } catch (e) {
-            console.error("[streamCompletion] Error parsing SSE data:", e);
+            console.error("[Stream] Error parsing SSE data:", e);
           }
         }
       }
@@ -136,6 +167,30 @@ async function summarizeConversation(
   }
 }
 
+async function callTool(method: string, args: any) {
+  const endpoint = `${NASH_MCP_ENDPOINT}/${method}`;
+  
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result;
+  } catch (error) {
+    console.error("Error calling tool:", error);
+    throw error;
+  }
+}
+
 export function Home({ onNavigate }: ChatProps): React.ReactElement {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -173,14 +228,15 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
         [...messages, userMessage],
         sessionId,
         null,
-        (chunk, newSessionId) => {
+        async (chunk, newSessionId) => {
           if (newSessionId) {
             setSessionId(newSessionId);
             return;
           }
 
           currentContentRef.current += chunk;
-
+          
+          // Update messages state
           setMessages((prevMessages) => {
             const lastMessage = prevMessages[prevMessages.length - 1];
             if (lastMessage?.role === "assistant" && lastMessage.isStreaming) {
@@ -289,7 +345,8 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                 <MessageContent
                   markdown
                   className={cn(
-                    message.role === "assistant" && "bg-transparent p-0"
+                    message.role === "user" && "bg-transparent p-0 text-right",
+                    message.role === "assistant" && "bg-nash-bg-secondary/50 p-4 rounded-lg"
                   )}
                 >
                   {message.content || (message.isStreaming ? "..." : "")}
