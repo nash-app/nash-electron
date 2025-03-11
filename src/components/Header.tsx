@@ -17,7 +17,7 @@ export function Header({
         <div className="flex items-center space-x-6">
           <NashLogo size={24} variant="white" />
           <div className="flex items-center space-x-4">
-            {/* <button
+            <button
               onClick={() => onNavigate(SetupStep.Home)}
               className={`transition-colors pt-1 border-b-2 ${
                 currentStep === SetupStep.Home
@@ -26,7 +26,7 @@ export function Header({
               }`}
             >
               Home
-            </button> */}
+            </button>
             <button
               onClick={() => onNavigate(SetupStep.Tasks)}
               className={`transition-colors pt-1 border-b-2 ${
@@ -36,6 +36,16 @@ export function Header({
               }`}
             >
               Tasks
+            </button>
+            <button
+              onClick={() => onNavigate(SetupStep.Tools)}
+              className={`transition-colors pt-1 border-b-2 ${
+                currentStep === SetupStep.Tools
+                  ? "text-white border-white"
+                  : "text-nash-text-secondary hover:text-nash-text border-transparent"
+              }`}
+            >
+              Tools
             </button>
             <button
               onClick={() => onNavigate(SetupStep.Secrets)}
@@ -57,7 +67,7 @@ export function Header({
             >
               Apps
             </button>
-            {/* <button
+            <button
               onClick={() => onNavigate(SetupStep.Models)}
               className={`transition-colors pt-1 border-b-2 ${
                 currentStep === SetupStep.Models
@@ -66,7 +76,7 @@ export function Header({
               }`}
             >
               Models
-            </button> */}
+            </button>
           </div>
         </div>
       </div>

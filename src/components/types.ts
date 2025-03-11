@@ -5,6 +5,7 @@ export enum SetupStep {
   Tasks = "tasks",
   Home = "home",
   Models = "models",
+  Tools = "tools",
 }
 
 export interface Service {

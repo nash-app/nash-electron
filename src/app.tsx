@@ -47,7 +47,7 @@ const App: React.FC = () => {
         setServices(updatedServices);
         // Navigate to home if this is the first service added
         if (!updatedServices.some((s) => s.added)) {
-          setCurrentStep(SetupStep.Tasks);
+          setCurrentStep(SetupStep.Home);
         }
       } else {
         console.error("Failed to configure MCP server");
@@ -97,14 +97,17 @@ const App: React.FC = () => {
       case SetupStep.Tasks:
         return <TaskPage onNavigate={handleNavigate} />;
 
-      // case SetupStep.Home:
-      //   return <Home onNavigate={handleNavigate} />;
+      case SetupStep.Home:
+        return <Home onNavigate={handleNavigate} />;
 
-      // case SetupStep.Models:
-      //   return <Models onNavigate={handleNavigate} />;
+      case SetupStep.Models:
+        return <Models onNavigate={handleNavigate} />;
+
+      case SetupStep.Tools:
+        return <Tools onNavigate={handleNavigate} />;
 
       default:
-        return <TaskPage onNavigate={handleNavigate} />;
+        return <Home onNavigate={handleNavigate} />;
     }
   };
 
@@ -125,3 +128,4 @@ root.render(
     <App />
   </React.StrictMode>
 );
+
