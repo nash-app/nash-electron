@@ -9,10 +9,10 @@ import {
 } from "../ui/prompt-input";
 import {
   Message,
-  MessageAvatar,
   MessageContent,
   MessageActions,
 } from "../ui/message";
+import { Avatar } from "../ui/avatar";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
 import { Square, ArrowUp, FileText, ChevronRight, ChevronDown, User } from "lucide-react";
@@ -513,14 +513,13 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       <div className="flex-1 flex flex-col overflow-hidden">
         <ChatContainer
           ref={chatContainerRef}
-          
           className="flex-1 space-y-2 px-4 pt-8 max-w-4xl mx-auto w-full"
           autoScroll={true}
         >
           {messages.map((message, index) => (
             <div key={message.id} className="flex flex-col gap-2">
-              <div className="flex items-start gap-2">
-                <div className="flex-shrink-0 w-10 h-10 rounded-md overflow-hidden">
+              <Message>
+                <Avatar className="h-[44px] w-[44px] rounded-lg">
                   {message.role === "assistant" ? (
                     <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
                       <img src={nashLogoWhite} alt="Nash" className="w-5 h-5" />
@@ -530,15 +529,14 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                       <User className="w-5 h-5 text-white" />
                     </div>
                   )}
-                </div>
-                <div className={cn(
+                </Avatar>
+                <MessageContent className={cn(
                   "rounded-lg px-3 py-2 break-words max-w-max",
                   message.role === "user" ? "bg-zinc-700 text-white" : "bg-zinc-900 text-zinc-100",
-                  // (!message.content.includes("\n") && message.content.length < 100) ? "max-w-max" : "flex-1"
                 )}>
-                  <div>{message.content}</div>
-                </div>
-              </div>
+                  {message.content}
+                </MessageContent>
+              </Message>
               {message.processingTool && (
                 <div className="flex flex-col gap-2 pl-12">
                   <div className="flex items-center gap-2">
