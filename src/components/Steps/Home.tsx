@@ -64,26 +64,29 @@ const streamCompletion = async (
   let functionCallContent = "";
   let pendingContent = "";
 
-  console.log("[streamCompletion] Starting with session:", sessionId);
-
   try {
-    console.log("[streamCompletion] Making request to:", NASH_LLM_SERVER_ENDPOINT);
-    console.log("[streamCompletion] Request payload:", {
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      session_id: sessionId
-    });
+    // Get the API key
+    const keys = await window.electron.getKeys();
+    const anthropicKey = keys.find(k => k.provider === "anthropic")?.value;
+
+    if (!anthropicKey) {
+      throw new Error("Anthropic API key not found. Please add your API key in the Models section.");
+    }
     
     const response = await fetch(NASH_LLM_SERVER_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ messages, session_id: sessionId }),
+      body: JSON.stringify({
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        session_id: sessionId,
+        api_key: anthropicKey,
+        api_base_url: "https://api.anthropic.com",
+        model: "claude-3-opus-20240229"
+      }),
       signal: abortSignal || undefined,
     });
-
-    console.log("[streamCompletion] Response status:", response.status);
-    console.log("[streamCompletion] Response headers:", Object.fromEntries(response.headers.entries()));
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "No error text available");
@@ -112,17 +115,12 @@ const streamCompletion = async (
         if (!line.trim()) continue;
         if (line.startsWith("data: ")) {
           const data = line.slice(6); // Remove "data: " prefix
-          if (data === "[DONE]") {
-            console.log("[streamCompletion] Stream complete");
-            break;
-          }
+          if (data === "[DONE]") break;
 
           try {
             const parsed = JSON.parse(data);
-            console.log("[streamCompletion] Received chunk:", parsed);
 
             if (parsed.session_id) {
-              console.log("[streamCompletion] New session ID:", parsed.session_id);
               onChunk("", parsed.session_id);
               continue;
             }
@@ -131,22 +129,16 @@ const streamCompletion = async (
 
             if (foundFunctionCall) {
               functionCallContent += parsed.content;
-              console.log("[streamCompletion] Accumulating function call content:", functionCallContent);
               
               if (functionCallContent.includes("</function_call>")) {
-                console.log("[streamCompletion] Complete function call detected");
-                // We have a complete function call, parse it
                 const functionCallMatch = functionCallContent.match(/<function_call>([^]*?)<\/function_call>/);
                 if (functionCallMatch && onFunctionCall) {
                   try {
                     const functionCall = JSON.parse(functionCallMatch[1]) as FunctionCall[];
-                    console.log("[streamCompletion] Parsed function call:", functionCall);
                     
                     if (functionCall.length > 0) {
                       const { name, arguments: args = {} } = functionCall[0].function;
-                      console.log("[streamCompletion] Executing function call:", name, args);
                       
-                      // Update the last message to show we're preparing the tool call
                       if (setMessages) {
                         setMessages((prev) => {
                           const newMessages = [...prev];
@@ -172,28 +164,21 @@ const streamCompletion = async (
             }
 
             pendingContent += parsed.content;
-            console.log("[streamCompletion] Current pending content:", pendingContent);
             
             const functionCallIndex = pendingContent.indexOf("<function_call>");
             
             if (functionCallIndex !== -1) {
-              console.log("[streamCompletion] Function call start detected at index:", functionCallIndex);
-              // We found the start of a function call
               foundFunctionCall = true;
-              // Send any content before the function call to the UI
               if (functionCallIndex > 0) {
                 const contentBeforeCall = pendingContent.substring(0, functionCallIndex);
-                console.log("[streamCompletion] Sending content before function call:", contentBeforeCall);
                 onChunk(contentBeforeCall);
               }
               functionCallContent = pendingContent.substring(functionCallIndex);
               pendingContent = "";
             } else {
-              // No function call found, send complete words/phrases to the UI
               const lastSpaceIndex = pendingContent.lastIndexOf(" ");
               if (lastSpaceIndex !== -1) {
                 const completeContent = pendingContent.substring(0, lastSpaceIndex + 1);
-                console.log("[streamCompletion] Sending complete phrase:", completeContent);
                 onChunk(completeContent);
                 pendingContent = pendingContent.substring(lastSpaceIndex + 1);
               }
@@ -205,14 +190,11 @@ const streamCompletion = async (
       }
     }
 
-    // Send any remaining content
     if (pendingContent && !foundFunctionCall) {
-      console.log("[streamCompletion] Sending remaining content:", pendingContent);
       onChunk(pendingContent);
     }
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      console.log("[streamCompletion] Stream aborted");
       return;
     }
     console.error("[streamCompletion] Error:", error);
@@ -288,9 +270,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   const currentContentRef = useRef("");
 
   const handleToolCall = useCallback(async (name: string, args: Record<string, any>) => {
-    console.log("[handleToolCall] Starting tool call:", name, args);
-    
-    // Update the last message to show tool processing
     setMessages((prev) => {
       const newMessages = [...prev];
       const lastMessage = newMessages[newMessages.length - 1];
@@ -300,15 +279,11 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
           status: "calling",
           functionCall: JSON.stringify({ tool_name: name, arguments: args }, null, 2)
         };
-        console.log("[handleToolCall] Updated message with tool status:", lastMessage);
       }
       return newMessages;
     });
 
     try {
-      console.log("[handleToolCall] Making API request to:", NASH_MCP_CALL_TOOL_ENDPOINT);
-      console.log("[handleToolCall] Request payload:", { tool_name: name, arguments: args });
-      
       const response = await fetch(NASH_MCP_CALL_TOOL_ENDPOINT, {
         method: "POST",
         headers: {
@@ -317,9 +292,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
         body: JSON.stringify({ tool_name: name, arguments: args }),
       });
 
-      console.log("[handleToolCall] Response status:", response.status);
-      console.log("[handleToolCall] Response headers:", Object.fromEntries(response.headers.entries()));
-
       if (!response.ok) {
         const errorText = await response.text().catch(() => "No error text available");
         console.error("[handleToolCall] Error response body:", errorText);
@@ -327,9 +299,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       }
 
       const result = await response.json();
-      console.log("[handleToolCall] Received tool response:", result);
       
-      // Feed the result back into streamCompletion
       const toolMessage: ChatMessage = {
         id: Date.now().toString(),
         role: "assistant",
@@ -338,7 +308,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
         isStreaming: true,
       };
 
-      console.log("[handleToolCall] Created new message for tool response:", toolMessage);
       setMessages((prev) => {
         const newMessages = [...prev];
         const lastMessage = newMessages[newMessages.length - 1];
@@ -353,7 +322,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       });
       
       const messagesWithResult = [...messages, { ...toolMessage, content: JSON.stringify(result) }];
-      console.log("[handleToolCall] Starting stream completion with messages:", messagesWithResult);
       
       await streamCompletion(
         messagesWithResult,
@@ -361,7 +329,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
         null,
         (chunk, newSessionId) => {
           if (newSessionId) {
-            console.log("[handleToolCall] Received new session ID:", newSessionId);
             setSessionId(newSessionId);
             return;
           }
@@ -373,7 +340,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                   ? { ...msg, content: msg.content + chunk }
                   : msg
               );
-              console.log("[handleToolCall] Updated message content:", chunk);
               return updatedMessages;
             }
             return prevMessages;
