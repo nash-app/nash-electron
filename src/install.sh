@@ -7,13 +7,15 @@ info()    { echo "[INFO] $*"; }
 success() { echo "[SUCCESS] $*"; }
 error()   { echo "[ERROR] $*" >&2; }
 
-# Version parameter (required)
-if [ $# -lt 1 ]; then
-  error "Version parameter is required. Usage: $0 <version>"
+# Version parameters (required)
+if [ $# -lt 2 ]; then
+  error "Both MCP and Local Server version parameters are required. Usage: $0 <mcp_server_version> <local_server_version>"
   exit 1
 fi
-VERSION="$1"
-info "Using Nash MCP version: $VERSION"
+NASH_MCP_SERVER_VERSION="$1"
+NASH_LOCAL_SERVER_VERSION="$2"
+info "Using Nash MCP version: $NASH_MCP_SERVER_VERSION"
+info "Using Nash Local Server version: $NASH_LOCAL_SERVER_VERSION"
 
 ################################################################################
 # 1. Determine paths and create directories
@@ -105,9 +107,9 @@ fi
 ################################################################################
 # 5. Download and set up Nash MCP repository
 ################################################################################
-NASH_MCP_ZIP_URL="https://github.com/nash-app/nash-mcp/archive/refs/tags/v$VERSION.zip"
-NASH_MCP_ZIP="$NASH_DIR/nash-mcp-v$VERSION.zip"
-NASH_MCP_EXTRACT_DIR="$NASH_DIR/nash-mcp-$VERSION"
+NASH_MCP_ZIP_URL="https://github.com/nash-app/nash-mcp/archive/refs/tags/v$NASH_MCP_SERVER_VERSION.zip"
+NASH_MCP_ZIP="$NASH_DIR/nash-mcp-v$NASH_MCP_SERVER_VERSION.zip"
+NASH_MCP_EXTRACT_DIR="$NASH_DIR/nash-mcp-$NASH_MCP_SERVER_VERSION"
 info "Downloading Nash MCP repository..."
 curl -L "$NASH_MCP_ZIP_URL" -o "$NASH_MCP_ZIP" || {
   error "Failed to download Nash MCP repository"
@@ -226,8 +228,8 @@ RUN_MCP_SCRIPT="$NASH_HOME_DIR/run_mcp.sh"
 info "Creating run_mcp.sh script at: $RUN_MCP_SCRIPT"
 cat > "$RUN_MCP_SCRIPT" << EOL
 #!/bin/bash
-source ~/Library/Application\ Support/Nash/nash-mcp-${VERSION}/.venv/bin/activate
-mcp run ~/Library/Application\ Support/Nash/nash-mcp-${VERSION}/src/nash_mcp/server.py
+source ~/Library/Application\ Support/Nash/nash-mcp-${NASH_MCP_SERVER_VERSION}/.venv/bin/activate
+mcp run ~/Library/Application\ Support/Nash/nash-mcp-${NASH_MCP_SERVER_VERSION}/src/nash_mcp/server.py
 EOL
 chmod +x "$RUN_MCP_SCRIPT"
 success "Created and made executable: $RUN_MCP_SCRIPT"
@@ -235,9 +237,8 @@ success "Created and made executable: $RUN_MCP_SCRIPT"
 ################################################################################
 # 9. Download and set up Nash Local Server repository
 ################################################################################
-LOCAL_SERVER_VERSION="0.1.3"
-NASH_LOCAL_SERVER_ZIP_URL="https://github.com/nash-app/nash-local-server/archive/refs/tags/v$LOCAL_SERVER_VERSION.zip"
-NASH_LOCAL_SERVER_ZIP="$NASH_DIR/nash-local-server-v$LOCAL_SERVER_VERSION.zip"
+NASH_LOCAL_SERVER_ZIP_URL="https://github.com/nash-app/nash-local-server/archive/refs/tags/v$NASH_LOCAL_SERVER_VERSION.zip"
+NASH_LOCAL_SERVER_ZIP="$NASH_DIR/nash-local-server-v$NASH_LOCAL_SERVER_VERSION.zip"
 info "Downloading Nash Local Server repository..."
 curl -L "$NASH_LOCAL_SERVER_ZIP_URL" -o "$NASH_LOCAL_SERVER_ZIP" || {
   error "Failed to download Nash Local Server repository"
@@ -336,8 +337,8 @@ RUN_LOCAL_SERVER_SCRIPT="$NASH_HOME_DIR/run_local_server.sh"
 info "Creating run_local_server.sh script at: $RUN_LOCAL_SERVER_SCRIPT"
 cat > "$RUN_LOCAL_SERVER_SCRIPT" << EOL
 #!/bin/bash
-source ~/Library/Application\ Support/Nash/nash-local-server-${LOCAL_SERVER_VERSION}/.venv/bin/activate
-python ~/Library/Application\ Support/Nash/nash-local-server-${LOCAL_SERVER_VERSION}/src/nash_local_server/server.py
+source ~/Library/Application\ Support/Nash/nash-local-server-${NASH_LOCAL_SERVER_VERSION}/.venv/bin/activate
+python ~/Library/Application\ Support/Nash/nash-local-server-${NASH_LOCAL_SERVER_VERSION}/src/nash_local_server/server.py
 EOL
 chmod +x "$RUN_LOCAL_SERVER_SCRIPT"
 success "Created and made executable: $RUN_LOCAL_SERVER_SCRIPT"
