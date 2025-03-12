@@ -18,7 +18,7 @@ info "Using Nash MCP version: $NASH_MCP_SERVER_VERSION"
 info "Using Nash Local Server version: $NASH_LOCAL_SERVER_VERSION"
 
 ################################################################################
-# 1. Determine paths and create directories
+# 1. COMMON SETUP: System Preparation
 ################################################################################
 USER_HOME="$HOME"
 NASH_DIR="${USER_HOME}/Library/Application Support/Nash"
@@ -44,7 +44,7 @@ cd "$USER_HOME"
 info "Changed working directory to: $(pwd)"
 
 ################################################################################
-# 2. Install required Homebrew dependencies
+# 2. COMMON SETUP: Homebrew Dependencies
 ################################################################################
 # Find Homebrew binary
 if [[ -f "/opt/homebrew/bin/brew" ]]; then
@@ -70,7 +70,7 @@ for dep in "${DEPS[@]}"; do
 done
 
 ################################################################################
-# 3. Install pyenv if not already available
+# 3. COMMON SETUP: Python Environment
 ################################################################################
 # Check if pyenv is already on the path
 if command -v pyenv &>/dev/null; then
@@ -88,7 +88,7 @@ fi
 info "Using pyenv at: $PYENV_BIN"
 
 ################################################################################
-# 4. Install Python 3.11.11 with pyenv
+# 4. COMMON SETUP: Python Installation
 ################################################################################
 TARGET_PYTHON_VERSION="3.11.11"
 
@@ -105,7 +105,7 @@ else
 fi
 
 ################################################################################
-# 5. Download and set up Nash MCP repository
+# 5. NASH MCP SERVER: Download and Installation
 ################################################################################
 NASH_MCP_ZIP_URL="https://github.com/nash-app/nash-mcp/archive/refs/tags/v$NASH_MCP_SERVER_VERSION.zip"
 NASH_MCP_ZIP="$NASH_DIR/nash-mcp-v$NASH_MCP_SERVER_VERSION.zip"
@@ -137,7 +137,7 @@ rm "$NASH_MCP_ZIP" || {
 success "Removed Nash MCP zip file"
 
 ################################################################################
-# 6. Create a virtual environment in the Nash MCP directory
+# 6. NASH MCP SERVER: Python Environment Setup
 ################################################################################
 VENV_PATH="$NASH_MCP_DIR/.venv"
 info "Ensuring venv at: $VENV_PATH"
@@ -158,7 +158,7 @@ info "Upgrading pip, setuptools, wheel in the virtual environment..."
 success "Upgraded pip, setuptools, wheel in the venv"
 
 ################################################################################
-# 7. Install Poetry and project dependencies
+# 7. NASH MCP SERVER: Dependencies Installation
 ################################################################################
 info "Installing Poetry in the virtual environment..."
 "$VENV_PATH/bin/pip" install poetry || {
@@ -200,7 +200,7 @@ else
 fi
 
 ################################################################################
-# 8. Create .nash directory, run_mcp.sh script, and environment file
+# 8. NASH MCP SERVER: Configuration and Run Script
 ################################################################################
 NASH_HOME_DIR="$USER_HOME/.nash"
 info "Creating .nash directory at: $NASH_HOME_DIR"
@@ -235,7 +235,7 @@ chmod +x "$RUN_MCP_SCRIPT"
 success "Created and made executable: $RUN_MCP_SCRIPT"
 
 ################################################################################
-# 9. Download and set up Nash Local Server repository
+# 9. NASH LOCAL SERVER: Download and Installation
 ################################################################################
 NASH_LOCAL_SERVER_ZIP_URL="https://github.com/nash-app/nash-local-server/archive/refs/tags/v$NASH_LOCAL_SERVER_VERSION.zip"
 NASH_LOCAL_SERVER_ZIP="$NASH_DIR/nash-local-server-v$NASH_LOCAL_SERVER_VERSION.zip"
@@ -269,7 +269,7 @@ rm "$NASH_LOCAL_SERVER_ZIP" || {
 success "Removed Nash Local Server zip file"
 
 ################################################################################
-# 10. Set up Nash Local Server environment and dependencies
+# 10. NASH LOCAL SERVER: Python Environment and Dependencies 
 ################################################################################
 LOCAL_SERVER_VENV_PATH="$NASH_LOCAL_SERVER_DIR/.venv"
 info "Creating virtual environment for Nash Local Server..."
@@ -322,6 +322,9 @@ else
   fi
 fi
 
+################################################################################
+# 11. NASH LOCAL SERVER: Configuration
+################################################################################
 # Create environment file for local server
 LOCAL_SERVER_ENV_FILE="$NASH_LOCAL_SERVER_DIR/.env"
 info "Creating environment file for Nash Local Server at: $LOCAL_SERVER_ENV_FILE"
@@ -344,7 +347,7 @@ chmod +x "$RUN_LOCAL_SERVER_SCRIPT"
 success "Created and made executable: $RUN_LOCAL_SERVER_SCRIPT"
 
 ################################################################################
-# 11. Summary
+# 12. INSTALLATION SUMMARY
 ################################################################################
 info "=== Installation script finished at $(date) ==="
 success "Nash MCP repository has been set up at: $NASH_MCP_DIR"
