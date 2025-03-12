@@ -235,7 +235,7 @@ success "Created and made executable: $RUN_MCP_SCRIPT"
 ################################################################################
 # 9. Download and set up Nash Local Server repository
 ################################################################################
-LOCAL_SERVER_VERSION="0.1.2"
+LOCAL_SERVER_VERSION="0.1.3"
 NASH_LOCAL_SERVER_ZIP_URL="https://github.com/nash-app/nash-local-server/archive/refs/tags/v$LOCAL_SERVER_VERSION.zip"
 NASH_LOCAL_SERVER_ZIP="$NASH_DIR/nash-local-server-v$LOCAL_SERVER_VERSION.zip"
 info "Downloading Nash Local Server repository..."
