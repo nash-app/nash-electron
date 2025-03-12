@@ -612,25 +612,11 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
             const newMessages = [...prev];
             const lastMessage = newMessages[newMessages.length - 1];
             if (lastMessage) {
-                console.log("[handleToolCall] Setting preparing state for message:", lastMessage.id);
+                console.log("[handleToolCall] Setting tool processing state for message:", lastMessage.id);
                 lastMessage.processingTool = {
                     name,
-                    status: "preparing",
+                    status: "calling",
                     functionCall: JSON.stringify({ tool_name: name, arguments: args }, null, 2)
-                };
-            }
-            return newMessages;
-        });
-
-        // Update to calling state before making the request
-        setMessages((prev) => {
-            const newMessages = [...prev];
-            const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage?.processingTool) {
-                console.log("[handleToolCall] Setting calling state for message:", lastMessage.id);
-                lastMessage.processingTool = {
-                    ...lastMessage.processingTool,
-                    status: "calling"
                 };
             }
             return newMessages;
