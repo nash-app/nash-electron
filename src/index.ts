@@ -686,15 +686,15 @@ app.whenReady().then(() => {
   });
 
   // Register keys management handlers
-  ipcMain.handle("get-keys", async () => {
+  ipcMain.handle("getKeys", async () => {
     return await readKeys();
   });
 
-  ipcMain.handle("add-key", async (_, provider, value) => {
+  ipcMain.handle("addKey", async (_, provider, value) => {
     return await addKey(provider, value);
   });
 
-  ipcMain.handle("delete-key", async (_, provider) => {
+  ipcMain.handle("deleteKey", async (_, provider) => {
     return await deleteKey(provider);
   });
 
@@ -730,6 +730,19 @@ app.whenReady().then(() => {
     }
   });
 
+  // Register model config handlers
+  ipcMain.handle("getModelConfigs", async () => {
+    return await readModelConfigs();
+  });
+
+  ipcMain.handle("saveModelConfig", async (_, provider: string, config: any) => {
+    return await saveModelConfig(provider, config);
+  });
+
+  ipcMain.handle("deleteModelConfig", async (_, provider: string, configKey: string) => {
+    return await deleteModelConfig(provider, configKey);
+  });
+
   // Then create the window
   createWindow();
 
@@ -750,3 +763,67 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+async function readModelConfigs() {
+  try {
+    if (!fs.existsSync(keysFilePath)) {
+      return [];
+    }
+    const data = await fs.promises.readFile(keysFilePath, "utf8");
+    return JSON.parse(data);
+  } catch (error) {
+    console.error("Error reading model configs:", error);
+    return [];
+  }
+}
+
+async function writeModelConfigs(configs: any[]) {
+  try {
+    await fs.promises.writeFile(keysFilePath, JSON.stringify(configs, null, 2));
+    return true;
+  } catch (error) {
+    console.error("Error writing model configs:", error);
+    return false;
+  }
+}
+
+async function saveModelConfig(provider: string, config: { baseUrl?: string; selectedModel?: string }) {
+  try {
+    const configs = await readModelConfigs();
+    const existingIndex = configs.findIndex((c: any) => c.provider === provider);
+    
+    if (existingIndex !== -1) {
+      configs[existingIndex] = { ...configs[existingIndex], ...config };
+    } else {
+      configs.push({ provider, ...config });
+    }
+
+    return await writeModelConfigs(configs);
+  } catch (error) {
+    console.error("Error saving model config:", error);
+    return false;
+  }
+}
+
+async function deleteModelConfig(provider: string, configKey: string) {
+  try {
+    const configs = await readModelConfigs();
+    const existingIndex = configs.findIndex((c: any) => c.provider === provider);
+    
+    if (existingIndex !== -1) {
+      // If the config exists, remove the specified key
+      const config = configs[existingIndex];
+      delete config[configKey];
+      
+      // If the config is now empty (no keys left), remove it entirely
+      if (Object.keys(config).length <= 1) { // <= 1 because 'provider' key will always exist
+        configs.splice(existingIndex, 1);
+      }
+    }
+
+    return await writeModelConfigs(configs);
+  } catch (error) {
+    console.error("Error deleting model config:", error);
+    return false;
+  }
+}

@@ -6,75 +6,42 @@ import { Header } from "../Header";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { Separator } from "../ui/separator";
 import { toast, Toaster } from "sonner";
 import openAIIcon from "../../../public/models/openai.png";
 import anthropicIcon from "../../../public/models/anthropic.png";
-import googleIcon from "../../../public/models/google.png";
 
 interface ModelsProps {
   onNavigate: (step: SetupStep) => void;
 }
 
-interface ModelInfo {
-  id: string;
-  name: string;
-}
-
 interface ApiSection {
   name: string;
-  models: ModelInfo[];
   inputValue: string;
   savedKey?: string;
   isSaving?: boolean;
   image?: string;
+  baseUrl?: string;
+  savedBaseUrl?: string;
+  isEditingBaseUrl?: boolean;
 }
-
-const OPENAI_MODELS: ModelInfo[] = [
-  { id: "o3-mini", name: "o3-mini" },
-  { id: "o1", name: "o1" },
-  { id: "o1-mini", name: "o1-mini" },
-  { id: "gpt-4.5-preview", name: "GPT-4.5 Preview" },
-  { id: "gpt-4o", name: "GPT-4o" },
-  { id: "gpt-4o-mini", name: "GPT-4o mini" },
-  { id: "gpt-4-turbo", name: "GPT-4 Turbo" },
-  { id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo" },
-];
-
-const ANTHROPIC_MODELS: ModelInfo[] = [
-  { id: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
-  { id: "claude-3.5-haiku", name: "Claude 3.5 Haiku" },
-  { id: "claude-3.5-sonnet-v2", name: "Claude 3.5 Sonnet v2" },
-  { id: "claude-3.5-sonnet", name: "Claude 3.5 Sonnet" },
-  { id: "claude-3-sonnet", name: "Claude 3 Sonnet" },
-  { id: "claude-3-haiku", name: "Claude 3 Haiku" },
-];
-
-const GOOGLE_MODELS: ModelInfo[] = [
-  { id: "gemini-1.5-pro", name: "Gemini 1.5 Pro" },
-  { id: "gemini-1.5-flash", name: "Gemini 1.5 Flash" },
-  { id: "gemini-1.5-pro-002", name: "Gemini 1.5 Pro 002" },
-];
 
 export function Models({ onNavigate }: ModelsProps): React.ReactElement {
   const [sections, setSections] = React.useState<ApiSection[]>([
     {
       name: "OpenAI",
-      models: OPENAI_MODELS,
       inputValue: "",
       image: openAIIcon,
+      baseUrl: "",
+      savedBaseUrl: "",
+      isEditingBaseUrl: false,
     },
     {
       name: "Anthropic",
-      models: ANTHROPIC_MODELS,
       inputValue: "",
       image: anthropicIcon,
-    },
-    {
-      name: "Google",
-      models: GOOGLE_MODELS,
-      inputValue: "",
-      image: googleIcon,
+      baseUrl: "",
+      savedBaseUrl: "",
+      isEditingBaseUrl: false,
     },
   ]);
   const [visibleKeys, setVisibleKeys] = React.useState<Set<number>>(new Set());
@@ -184,9 +151,69 @@ export function Models({ onNavigate }: ModelsProps): React.ReactElement {
     }
   };
 
-  // Load saved keys on mount
+  const handleBaseUrlChange = (index: number, value: string) => {
+    setSections((prev) =>
+      prev.map((s, i) => (i === index ? { ...s, baseUrl: value } : s))
+    );
+  };
+
+  const saveBaseUrl = async (index: number) => {
+    const section = sections[index];
+    try {
+      const success = await window.electron.saveModelConfig(
+        section.name.toLowerCase(),
+        {
+          baseUrl: section.baseUrl,
+        }
+      );
+
+      if (success) {
+        setSections((prev) =>
+          prev.map((s, i) =>
+            i === index
+              ? {
+                  ...s,
+                  savedBaseUrl: section.baseUrl,
+                  isEditingBaseUrl: false,
+                }
+              : s
+          )
+        );
+        toast.success(`${section.name} base URL saved successfully`);
+      } else {
+        toast.error(`Failed to save ${section.name} base URL`);
+      }
+    } catch (error) {
+      toast.error(`Error saving ${section.name} base URL`);
+    }
+  };
+
+  // Load saved keys and model configs on mount
   React.useEffect(() => {
     loadSavedKeys();
+    const loadModelConfigs = async () => {
+      try {
+        const configs = await window.electron.getModelConfigs();
+        setSections((prev) =>
+          prev.map((section) => {
+            const config = configs.find(
+              (c: any) => c.provider === section.name.toLowerCase()
+            );
+            return config
+              ? {
+                  ...section,
+                  baseUrl: config.baseUrl || "",
+                  savedBaseUrl: config.baseUrl || "",
+                }
+              : section;
+          })
+        );
+      } catch (error) {
+        console.error("Error loading model configurations:", error);
+      }
+    };
+
+    loadModelConfigs();
   }, []);
 
   return (
@@ -240,8 +267,8 @@ export function Models({ onNavigate }: ModelsProps): React.ReactElement {
                       <div className="flex space-x-4">
                         {section.savedKey ? (
                           <div className="flex-1 p-2 bg-nash-bg-secondary rounded-lg border border-nash-border">
-                            <div className="flex justify-between items-center">
-                              <div className="text-nash-text-secondary">
+                            <div className="flex justify-between gap-2 items-center">
+                              <div className="text-nash-text-secondary break-all">
                                 {visibleKeys.has(index)
                                   ? section.savedKey
                                   : "•••••••••"}
@@ -382,38 +409,147 @@ export function Models({ onNavigate }: ModelsProps): React.ReactElement {
                       </div>
                     </div>
 
-                    {/* <Separator className="bg-nash-border" /> */}
                     <div className="space-y-2">
-                      <div className="flex items-center">
-                        <h3 className="text-sm font-medium uppercase tracking-wide text-nash-text-secondary">
-                          Models
-                        </h3>
-                        <span className="text-nash-text-secondary/70 text-xs pl-1">
-                          ({section.models.length})
-                        </span>
+                      <h3 className="text-sm font-medium uppercase tracking-wide text-nash-text-secondary">
+                        Base URL (Optional)
+                      </h3>
+                      <div className="flex space-x-4">
+                        {section.savedBaseUrl && !section.isEditingBaseUrl ? (
+                          <div className="flex-1 p-2 bg-nash-bg-secondary rounded-lg border border-nash-border">
+                            <div className="flex justify-between items-center">
+                              <div className="text-nash-text-secondary">
+                                {section.savedBaseUrl}
+                              </div>
+                              <div className="flex items-center space-x-3">
+                                <button
+                                  onClick={() => copyToClipboard(section.savedBaseUrl!, index)}
+                                  className="text-nash-text-secondary hover:text-nash-text transition-colors"
+                                  type="button"
+                                  title="Copy base URL"
+                                >
+                                  {copiedIndex === index ? (
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      strokeWidth={1.5}
+                                      stroke="currentColor"
+                                      className="w-5 h-5"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                      />
+                                    </svg>
+                                  ) : (
+                                    <svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      strokeWidth={1.5}
+                                      stroke="currentColor"
+                                      className="w-5 h-5"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184"
+                                      />
+                                    </svg>
+                                  )}
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSections(prev =>
+                                      prev.map((s, i) =>
+                                        i === index ? { ...s, baseUrl: section.savedBaseUrl, isEditingBaseUrl: true } : s
+                                      )
+                                    );
+                                  }}
+                                  className="text-nash-text-secondary hover:text-nash-text transition-colors"
+                                  type="button"
+                                  title="Edit base URL"
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    strokeWidth={1.5}
+                                    stroke="currentColor"
+                                    className="w-5 h-5"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"
+                                    />
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    setSections(prev =>
+                                      prev.map((s, i) =>
+                                        i === index ? { ...s, baseUrl: s.savedBaseUrl, isEditingBaseUrl: false } : s
+                                      )
+                                    );
+                                  }}
+                                  className="text-nash-text-secondary hover:text-red-400 transition-colors"
+                                  type="button"
+                                  title="Delete base URL"
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    strokeWidth={1.5}
+                                    stroke="currentColor"
+                                    className="w-5 h-5"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <Input
+                              value={section.baseUrl}
+                              onChange={(e) =>
+                                handleBaseUrlChange(index, e.target.value)
+                              }
+                              className="flex-1 bg-nash-bg-secondary text-nash-text border-nash-border"
+                            />
+                            <div className="flex space-x-2">
+                              <Button
+                                onClick={() => saveBaseUrl(index)}
+                                className="bg-nash-button hover:bg-nash-button-hover text-nash-button-text"
+                              >
+                                Save URL
+                              </Button>
+                              {section.isEditingBaseUrl && (
+                                <Button
+                                  onClick={() => {
+                                    setSections(prev =>
+                                      prev.map((s, i) =>
+                                        i === index ? { ...s, baseUrl: s.savedBaseUrl, isEditingBaseUrl: false } : s
+                                      )
+                                    );
+                                  }}
+                                  className="bg-nash-bg-secondary hover:bg-nash-bg text-nash-text border-nash-border"
+                                >
+                                  Cancel
+                                </Button>
+                              )}
+                            </div>
+                          </>
+                        )}
                       </div>
-                      {section.models.length > 0 ? (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-1">
-                          {section.models.map((model) => (
-                            <p
-                              key={model.id}
-                              className="text-sm text-nash-text py-1 truncate"
-                              title={model.name}
-                            >
-                              {model.name}
-                            </p>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="py-4 text-center">
-                          <p className="text-sm text-nash-text-secondary">
-                            No models available
-                          </p>
-                          <p className="text-xs text-nash-text-secondary mt-1">
-                            Add your API key to use models from this provider
-                          </p>
-                        </div>
-                      )}
                     </div>
                   </div>
                 </CardContent>
