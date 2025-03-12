@@ -15,7 +15,13 @@ export function Header({
     <nav className="sticky top-0 z-50 bg-nash-bg border-b border-nash-border px-6 py-4 pt-10">
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-6">
-          <NashLogo size={24} variant="white" />
+          <button onClick={() => onNavigate(SetupStep.Tasks)}>
+            <NashLogo
+              size={16}
+              variant="clipped"
+              className="translate-y-[4px]"
+            />
+          </button>
           <div className="flex items-center space-x-4">
             {/* <button
               onClick={() => onNavigate(SetupStep.Home)}

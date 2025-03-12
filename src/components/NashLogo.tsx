@@ -1,9 +1,9 @@
 import * as React from "react";
 import nashLogo from "../../public/nash-logo.png";
-import nashLogoWhite from "../../public/logo-white.png";
+import nashLogoGradient from "../../public/logo-gradient.png";
 import { cn } from "../lib/utils";
 
-type LogoVariant = "default" | "white";
+type LogoVariant = "default" | "clipped";
 
 interface NashLogoProps {
   size?: number;
@@ -16,7 +16,7 @@ export function NashLogo({
   className,
   variant = "default",
 }: NashLogoProps): React.ReactElement {
-  const logoSrc = variant === "white" ? nashLogoWhite : nashLogo;
+  const logoSrc = variant === "clipped" ? nashLogoGradient : nashLogo;
 
   return (
     <div className={cn("flex justify-center", className)}>
