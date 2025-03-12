@@ -233,11 +233,123 @@ chmod +x "$RUN_MCP_SCRIPT"
 success "Created and made executable: $RUN_MCP_SCRIPT"
 
 ################################################################################
-# 9. Summary
+# 9. Download and set up Nash Local Server repository
+################################################################################
+LOCAL_SERVER_VERSION="0.1.2"
+NASH_LOCAL_SERVER_ZIP_URL="https://github.com/nash-app/nash-local-server/archive/refs/tags/v$LOCAL_SERVER_VERSION.zip"
+NASH_LOCAL_SERVER_ZIP="$NASH_DIR/nash-local-server-v$LOCAL_SERVER_VERSION.zip"
+info "Downloading Nash Local Server repository..."
+curl -L "$NASH_LOCAL_SERVER_ZIP_URL" -o "$NASH_LOCAL_SERVER_ZIP" || {
+  error "Failed to download Nash Local Server repository"
+  exit 1
+}
+success "Downloaded Nash Local Server repository to $NASH_LOCAL_SERVER_ZIP"
+
+info "Unzipping Nash Local Server repository..."
+unzip -q -o "$NASH_LOCAL_SERVER_ZIP" -d "$NASH_DIR" || {
+  error "Failed to unzip Nash Local Server repository"
+  exit 1
+}
+success "Unzipped Nash Local Server repository to $NASH_DIR"
+
+# Find the actual directory name after extraction
+NASH_LOCAL_SERVER_DIR=$(find "$NASH_DIR" -maxdepth 1 -type d -name "nash-local-server*" | head -n 1)
+if [ -z "$NASH_LOCAL_SERVER_DIR" ]; then
+  error "Could not find the extracted Nash Local Server directory"
+  exit 1
+fi
+info "Found Nash Local Server directory at: $NASH_LOCAL_SERVER_DIR"
+
+info "Removing zip file..."
+rm "$NASH_LOCAL_SERVER_ZIP" || {
+  error "Failed to remove Nash Local Server zip file"
+  exit 1
+}
+success "Removed Nash Local Server zip file"
+
+################################################################################
+# 10. Set up Nash Local Server environment and dependencies
+################################################################################
+LOCAL_SERVER_VENV_PATH="$NASH_LOCAL_SERVER_DIR/.venv"
+info "Creating virtual environment for Nash Local Server..."
+rm -rf "$LOCAL_SERVER_VENV_PATH"
+"$PYTHON_EXE" -m venv "$LOCAL_SERVER_VENV_PATH" || {
+  error "Failed to create venv at $LOCAL_SERVER_VENV_PATH"
+  exit 1
+}
+success "Virtual environment created at: $LOCAL_SERVER_VENV_PATH"
+
+info "Upgrading pip, setuptools, wheel in the virtual environment..."
+"$LOCAL_SERVER_VENV_PATH/bin/pip" install --upgrade pip setuptools wheel || {
+  error "Failed to upgrade pip, setuptools, wheel in venv"
+  exit 1
+}
+success "Upgraded pip, setuptools, wheel in the venv"
+
+info "Installing Poetry in the Nash Local Server virtual environment..."
+"$LOCAL_SERVER_VENV_PATH/bin/pip" install poetry || {
+  error "Failed to install Poetry in venv"
+  exit 1
+}
+success "Installed Poetry in the virtual environment"
+
+info "Installing Nash Local Server project dependencies with Poetry..."
+cd "$NASH_LOCAL_SERVER_DIR"
+if [ -f "$NASH_LOCAL_SERVER_DIR/pyproject.toml" ]; then
+  "$LOCAL_SERVER_VENV_PATH/bin/poetry" config virtualenvs.create false && "$LOCAL_SERVER_VENV_PATH/bin/poetry" install --no-interaction --no-cache || {
+    info "Poetry install encountered issues, trying alternative installation method..."
+    if [ -f "$NASH_LOCAL_SERVER_DIR/requirements.txt" ]; then
+      "$LOCAL_SERVER_VENV_PATH/bin/pip" install -r "$NASH_LOCAL_SERVER_DIR/requirements.txt" || {
+        error "Failed to install requirements from requirements.txt"
+        exit 1
+      }
+      success "Installed dependencies from requirements.txt"
+    else
+      info "No requirements.txt found, continuing without installing additional dependencies"
+    fi
+  }
+else
+  info "No pyproject.toml found, checking for requirements.txt..."
+  if [ -f "$NASH_LOCAL_SERVER_DIR/requirements.txt" ]; then
+    "$LOCAL_SERVER_VENV_PATH/bin/pip" install -r "$NASH_LOCAL_SERVER_DIR/requirements.txt" || {
+      error "Failed to install requirements from requirements.txt"
+      exit 1
+    }
+    success "Installed dependencies from requirements.txt"
+  else
+    info "No dependency files found, continuing without installing additional dependencies"
+  fi
+fi
+
+# Create environment file for local server
+LOCAL_SERVER_ENV_FILE="$NASH_LOCAL_SERVER_DIR/.env"
+info "Creating environment file for Nash Local Server at: $LOCAL_SERVER_ENV_FILE"
+cat > "$LOCAL_SERVER_ENV_FILE" << EOL
+# Nash Local Server Environment Variables
+NASH_PATH=${NASH_MCP_DIR}
+EOL
+chmod 644 "$LOCAL_SERVER_ENV_FILE"  # User can read/write, others can read
+success "Created environment file for Nash Local Server: $LOCAL_SERVER_ENV_FILE"
+
+# Create run script for local server
+RUN_LOCAL_SERVER_SCRIPT="$NASH_HOME_DIR/run_local_server.sh"
+info "Creating run_local_server.sh script at: $RUN_LOCAL_SERVER_SCRIPT"
+cat > "$RUN_LOCAL_SERVER_SCRIPT" << EOL
+#!/bin/bash
+source ~/Library/Application\ Support/Nash/nash-local-server-${LOCAL_SERVER_VERSION}/.venv/bin/activate
+python ~/Library/Application\ Support/Nash/nash-local-server-${LOCAL_SERVER_VERSION}/src/nash_local_server/server.py
+EOL
+chmod +x "$RUN_LOCAL_SERVER_SCRIPT"
+success "Created and made executable: $RUN_LOCAL_SERVER_SCRIPT"
+
+################################################################################
+# 11. Summary
 ################################################################################
 info "=== Installation script finished at $(date) ==="
 success "Nash MCP repository has been set up at: $NASH_MCP_DIR"
+success "Nash Local Server repository has been set up at: $NASH_LOCAL_SERVER_DIR"
 success "Python $TARGET_PYTHON_VERSION is installed"
-info "Virtual environment: $VENV_PATH"
+info "MCP Virtual environment: $VENV_PATH"
+info "Local Server Virtual environment: $LOCAL_SERVER_VENV_PATH"
 info "You can run: \"$VENV_PATH/bin/python\" --version"
 info "Log file: $LOG_FILE"

@@ -85,33 +85,42 @@ interface ConfigAlert {
 }
 
 const ALL_MODELS: ProviderModel[] = [
-  { id: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet", provider: "anthropic" },
-  { id: "claude-3.5-haiku", name: "Claude 3.5 Haiku", provider: "anthropic" },
-  { id: "claude-3.5-sonnet-v2", name: "Claude 3.5 Sonnet v2", provider: "anthropic" },
-  { id: "claude-3.5-sonnet", name: "Claude 3.5 Sonnet", provider: "anthropic" },
-  { id: "claude-3-sonnet", name: "Claude 3 Sonnet", provider: "anthropic" },
-  { id: "claude-3-haiku", name: "Claude 3 Haiku", provider: "anthropic" },
-  { id: "gpt-4-turbo", name: "GPT-4 Turbo", provider: "openai" },
-  { id: "gpt-4", name: "GPT-4", provider: "openai" },
-  { id: "gpt-3.5-turbo", name: "GPT-3.5 Turbo", provider: "openai" },
-  
+  { id: "claude-3-7-sonnet-latest", name: "Claude 3.7 Sonnet", provider: "anthropic" },
+  { id: "claude-3-5-sonnet-latest", name: "Claude 3.5 Sonnet", provider: "anthropic" },
+  { id: "claude-3-5-haiku-latest", name: "Claude 3.5 Haiku", provider: "anthropic" },
+  { id: "o3-mini", name: "o3-mini", provider: "openai" },
+  { id: "o1", name: "o1", provider: "openai" },
+  { id: "o1-preview", name: "o1-preview", provider: "openai" },
+  { id: "o1-mini", name: "o1-mini", provider: "openai" },
+  { id: "gpt-4o", name: "gpt-4o", provider: "openai" },
+  { id: "gpt-4o-mini", name: "gpt-4o-mini", provider: "openai" },
 ];
 
 const getProviderConfig = async (modelId: string) => {
+  console.log("[getProviderConfig] Getting config for model:", modelId);
   const keys = await window.electron.getKeys();
   const modelConfigs = await window.electron.getModelConfigs() as ModelConfig[];
   
   const model = ALL_MODELS.find(m => m.id === modelId);
   if (!model) {
+    console.error("[getProviderConfig] Model not found:", modelId);
     throw new Error("Selected model not found.");
   }
 
+  console.log("[getProviderConfig] Found model:", { id: model.id, provider: model.provider });
   const key = keys.find(k => k.provider === model.provider)?.value;
   const config = modelConfigs.find(c => c.provider === model.provider);
 
   if (!key) {
+    console.error("[getProviderConfig] API key not found for provider:", model.provider);
     throw new Error(`${model.provider.charAt(0).toUpperCase() + model.provider.slice(1)} API key not found. Please add your API key in the Models section.`);
   }
+
+  console.log("[getProviderConfig] Config loaded:", { 
+    provider: model.provider, 
+    hasKey: !!key, 
+    hasBaseUrl: !!config?.baseUrl 
+  });
 
   return {
     key,
@@ -130,6 +139,7 @@ const streamCompletion = async (
   onFunctionCall?: (name: string, args: Record<string, any>) => void,
   setMessages?: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void
 ) => {
+  console.log("[streamCompletion] Starting stream with model:", modelId);
   let foundFunctionCall = false;
   let functionCallContent = "";
   let pendingContent = "";
@@ -139,10 +149,15 @@ const streamCompletion = async (
     const defaultBaseUrls: Record<string, string> = {
       anthropic: "https://api.anthropic.com",
       openai: "https://api.openai.com",
-      google: "https://generativelanguage.googleapis.com",
     };
     
     const baseUrl = config.baseUrl || defaultBaseUrls[config.provider];
+    console.log("[streamCompletion] Using configuration:", {
+      provider: config.provider,
+      model: config.model,
+      baseUrl,
+      hasCustomBaseUrl: !!config.baseUrl
+    });
     
     const response = await fetch(NASH_LLM_SERVER_ENDPOINT, {
       method: "POST",
@@ -160,9 +175,14 @@ const streamCompletion = async (
       signal: abortSignal || undefined,
     });
 
+    console.log("[streamCompletion] Response:", response);
     if (!response.ok) {
       const errorText = await response.text().catch(() => "No error text available");
-      console.error("[streamCompletion] Error response body:", errorText);
+      console.error("[streamCompletion] Error response:", {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText
+      });
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
@@ -344,55 +364,76 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentContentRef = useRef("");
 
+  // Load configured providers on mount
   React.useEffect(() => {
-    const checkConfigurations = async () => {
-      const alerts: ConfigAlert[] = [];
+    const loadConfiguredProviders = async () => {
+      console.log("[loadConfiguredProviders] Loading provider configurations...");
       try {
         const keys = await window.electron.getKeys();
-        const modelConfigs = await window.electron.getModelConfigs() as ModelConfig[];
-
-        const configuredProviders = new Set(keys.map(k => k.provider));
-        if (configuredProviders.size === 0) {
-          alerts.push({
-            type: "error",
-            message: "No API keys configured. Please add at least one API key in the Models section."
-          });
-        }
-
+        const providers = new Set(keys.map(k => k.provider));
+        console.log("[loadConfiguredProviders] Found providers:", Array.from(providers));
+        setConfiguredProviders(providers);
+        
+        // Set default model based on available keys
         if (!selectedModel) {
-          for (const config of modelConfigs) {
-            if (config.selectedModel && configuredProviders.has(config.provider)) {
-              setSelectedModel(config.selectedModel);
-              break;
-            }
+          console.log("[loadConfiguredProviders] No model selected, selecting default...");
+          if (providers.has("anthropic")) {
+            console.log("[loadConfiguredProviders] Setting default to Claude 3.7");
+            setSelectedModel("claude-3-7-sonnet-latest");
+          } else if (providers.has("openai")) {
+            console.log("[loadConfiguredProviders] Setting default to O3 Mini");
+            setSelectedModel("o3-mini");
           }
         }
 
+        // Set alerts if no keys configured
+        if (providers.size === 0) {
+          console.log("[loadConfiguredProviders] No providers configured");
+          setConfigAlerts([{
+            type: "error",
+            message: "",
+            link: {
+              text: "Add API key",
+              step: SetupStep.Models
+            }
+          }]);
+        }
       } catch (error) {
-        console.error("Error checking configurations:", error);
-        alerts.push({
+        console.error("[loadConfiguredProviders] Error:", error);
+        setConfigAlerts([{
           type: "error",
           message: "Error checking configurations. Please try again."
-        });
-      }
-      setConfigAlerts(alerts);
-    };
-
-    checkConfigurations();
-  }, [selectedModel]);
-
-  React.useEffect(() => {
-    const loadConfiguredProviders = async () => {
-      try {
-        const keys = await window.electron.getKeys();
-        console.log("Loaded keys:", keys);
-        setConfiguredProviders(new Set(keys.map(k => k.provider)));
-      } catch (error) {
-        console.error("Error loading configured providers:", error);
+        }]);
       }
     };
     loadConfiguredProviders();
   }, []);
+
+  // Monitor selected model changes
+  React.useEffect(() => {
+    if (selectedModel) {
+      console.log("[modelChangeMonitor] Model changed to:", selectedModel);
+      const model = ALL_MODELS.find(m => m.id === selectedModel);
+      if (model) {
+        const provider = model.provider;
+        console.log("[modelChangeMonitor] Checking provider configuration:", provider);
+        if (!configuredProviders.has(provider)) {
+          console.log("[modelChangeMonitor] Provider not configured:", provider);
+          setConfigAlerts([{
+            type: "error",
+            message: `${provider.charAt(0).toUpperCase() + provider.slice(1)} API key required. Please add your API key in the`,
+            link: {
+              text: "Models section",
+              step: SetupStep.Models
+            }
+          }]);
+        } else {
+          console.log("[modelChangeMonitor] Provider properly configured:", provider);
+          setConfigAlerts([]);
+        }
+      }
+    }
+  }, [selectedModel, configuredProviders]);
 
   const handleToolCall = useCallback(async (name: string, args: Record<string, any>) => {
     setMessages((prev) => {
@@ -480,8 +521,17 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   }, [messages, sessionId, setSessionId, setMessages, selectedModel]);
 
   const handleSubmit = useCallback(async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || configuredProviders.size === 0 || !selectedModel) {
+      console.log("[handleSubmit] Submission blocked:", {
+        hasInput: !!input.trim(),
+        isLoading,
+        hasProviders: configuredProviders.size > 0,
+        hasModel: !!selectedModel
+      });
+      return;
+    }
 
+    console.log("[handleSubmit] Starting submission with model:", selectedModel);
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: "user",
@@ -565,7 +615,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       setIsLoading(false);
       abortControllerRef.current = null;
     }
-  }, [input, isLoading, messages, sessionId, handleToolCall, setMessages, selectedModel]);
+  }, [input, isLoading, messages, sessionId, handleToolCall, setMessages, selectedModel, configuredProviders]);
 
   const handleSummarize = useCallback(async () => {
     if (isLoading || messages.length === 0) return;
@@ -724,8 +774,8 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
               onSubmit={handleSubmit}
             >
               <PromptInputTextarea
-                placeholder="Ask me anything..."
-                disabled={isLoading}
+                placeholder={configuredProviders.size === 0 ? "Please add an API key to start chatting..." : "Ask me anything..."}
+                disabled={isLoading || configuredProviders.size === 0}
                 className="!h-[100px] !rounded-md"
               />
               <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
@@ -756,7 +806,9 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                     }}
                   >
                     <SelectTrigger className="w-[200px] h-8 text-gray-400">
-                      <SelectValue placeholder="Select a model" />
+                      <SelectValue>
+                        {selectedModel ? ALL_MODELS.find(m => m.id === selectedModel)?.name : "Select a model"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup className="mb-2">
@@ -787,12 +839,20 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                           <SelectItem 
                             key={model.id} 
                             value={model.id}
-                            disabled={!configuredProviders.has("anthropic")}
+                            disabled={!configuredProviders.has("anthropic") || model.id === selectedModel}
                             className={cn(
-                              !configuredProviders.has("anthropic") && "opacity-50 cursor-not-allowed"
+                              !configuredProviders.has("anthropic") && "opacity-50 cursor-not-allowed",
+                              model.id === selectedModel && "bg-zinc-700/50"
                             )}
                           >
-                            {model.name}
+                            <div className="flex items-center justify-between w-full gap-4">
+                              <span>{model.name}</span>
+                              {model.id === selectedModel ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              ) : <div className="w-4 shrink-0" />}
+                            </div>
                           </SelectItem>
                         ))}
                       </SelectGroup>
@@ -824,12 +884,20 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                           <SelectItem 
                             key={model.id} 
                             value={model.id}
-                            disabled={!configuredProviders.has("openai")}
+                            disabled={!configuredProviders.has("openai") || model.id === selectedModel}
                             className={cn(
-                              !configuredProviders.has("openai") && "opacity-50 cursor-not-allowed"
+                              !configuredProviders.has("openai") && "opacity-50 cursor-not-allowed",
+                              model.id === selectedModel && "bg-zinc-700/50"
                             )}
                           >
-                            {model.name}
+                            <div className="flex items-center justify-between w-full gap-4">
+                              <span>{model.name}</span>
+                              {model.id === selectedModel ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-500 shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              ) : <div className="w-4 shrink-0" />}
+                            </div>
                           </SelectItem>
                         ))}
                       </SelectGroup>
@@ -858,13 +926,11 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                       size="icon"
                       className="h-8 w-8 rounded-full"
                       onClick={handleSubmit}
-                      disabled={!input.trim() || isLoading}
+                      disabled={!input.trim() || isLoading || configuredProviders.size === 0 || !selectedModel}
                     >
-                      {isLoading ? (
-                        <Square className="h-5 w-5 fill-current" />
-                      ) : (
+                      
                         <ArrowUp className="h-5 w-5" />
-                      )}
+                      
                     </Button>
                   </PromptInputAction>
                 </div>
