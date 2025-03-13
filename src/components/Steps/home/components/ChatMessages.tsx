@@ -6,6 +6,7 @@ import { Avatar } from "../../../ui/avatar";
 import { Badge } from "../../../ui/badge";
 import { User, ChevronRight, ChevronDown } from "lucide-react";
 import nashLogoWhite from "../../../../../public/nash-logo-white.svg";
+import { MarkdownContent } from "./MarkdownContent";
 
 interface ChatMessagesProps {
   messages: ChatMessage[];
@@ -37,7 +38,7 @@ export function ChatMessages({
                 </div>
               )}
             </Avatar>
-            <MessageContent
+            <div
               className={cn(
                 "rounded-lg px-3 py-2 break-words max-w-max",
                 message.role === "user"
@@ -45,12 +46,15 @@ export function ChatMessages({
                   : "bg-zinc-900 text-zinc-100"
               )}
             >
-              {message.role === "assistant" &&
-              message.isStreaming &&
-              !message.content
-                ? "Thinking..."
-                : message.content}
-            </MessageContent>
+              {message.role === "assistant" && message.isStreaming && !message.content ? (
+                <span className="text-zinc-400">Thinking...</span>
+              ) : (
+                <MarkdownContent 
+                  content={message.content} 
+                  className="prose prose-invert max-w-none" 
+                />
+              )}
+            </div>
           </Message>
           {message.processingTool && (
             <div className="flex flex-col gap-2 pl-12">
