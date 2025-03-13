@@ -42,8 +42,10 @@ export function ChatMessages({
                   : "bg-zinc-900 text-zinc-100"
               )}
             >
-              {message.role === "assistant" && message.isStreaming && !message.content 
-                ? "Thinking..." 
+              {message.role === "assistant" &&
+              message.isStreaming &&
+              !message.content
+                ? "Thinking..."
                 : message.content}
             </MessageContent>
           </Message>

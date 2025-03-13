@@ -316,23 +316,13 @@ const handleToolResult = async (
   };
 
   setMessages((prev) => {
-    const newMessages = [...prev, followUpMessage];
+    const newMessages = [...prev, toolResultMessage, followUpMessage];
     logMessageHistory(newMessages, "Before Follow-up Request");
     return newMessages;
   });
 
-  const userMessages = messages.filter((m) => m.role === "user");
-  const assistantMessages = messages.filter(
-    (m) => m.role === "assistant" && !m.isStreaming && m.content
-  );
-  const messagesForRequest = [
-    ...userMessages,
-    ...assistantMessages,
-    toolResultMessage,
-  ];
-
   await streamCompletion(
-    messagesForRequest,
+    messages.concat(toolResultMessage, followUpMessage),
     null,
     abortSignal,
     onChunk,
