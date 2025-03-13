@@ -20,7 +20,7 @@ import {
   User,
 } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
-import nashLogoWhite from "../../../public/nash-logo-white.svg";
+import nashLogoWhite from "../../../../public/nash-logo-white.svg";
 import { cn } from "../../../lib/utils";
 import { ChatContainer } from "../../ui/chat-container";
 import {
@@ -37,13 +37,13 @@ import {
   SelectValue,
   SelectLabel,
 } from "../../ui/select";
-import anthropicIcon from "../../../public/models/anthropic.png";
-import openAIIcon from "../../../public/models/openai.png";
+import anthropicIcon from "../../../../public/models/anthropic.png";
+import openAIIcon from "../../../../public/models/openai.png";
 import { v4 as uuidv4 } from "uuid";
 import { ChatMessage, ChatProps, ConfigAlert } from "./types";
-import { ModelSelector } from "./ModelSelector";
-import { ChatMessages } from "./ChatMessages";
-import { ConfigAlerts } from "./ConfigAlerts";
+import { ModelSelector } from "./components/ModelSelector";
+import { ChatMessages } from "./components/ChatMessages";
+import { ConfigAlerts } from "./components/ConfigAlerts";
 import { ALL_MODELS } from "./constants";
 import { streamCompletion, summarizeConversation } from "./chatService";
 
@@ -499,7 +499,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
           <ChatMessages
             messages={messages}
             expandedTools={expandedTools}
-            onToggleToolExpand={(messageId) =>
+            onToggleToolExpand={(messageId: string) =>
               setExpandedTools((prev) => ({
                 ...prev,
                 [messageId]: !prev[messageId],
