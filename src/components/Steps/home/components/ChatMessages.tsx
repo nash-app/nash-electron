@@ -57,7 +57,7 @@ export function ChatMessages({
             </div>
           </Message>
           {message.processingTool && (
-            <div className="flex flex-col gap-2 pl-12">
+            <div className="flex flex-col gap-2 pl-14">
               <div className="flex items-center gap-2">
                 <Badge
                   variant="secondary"
