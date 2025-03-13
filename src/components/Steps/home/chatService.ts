@@ -82,6 +82,12 @@ const handleFunctionCall = async (
   modelId: string,
   abortSignal: AbortSignal | null
 ) => {
+  // Check if already aborted
+  if (abortSignal?.aborted) {
+    console.log("[handleFunctionCall] Aborted before processing function call");
+    return false;
+  }
+
   const functionCallMatch = functionCallContent.match(
     /<function_call>([^]*?)<\/function_call>/
   );
@@ -101,22 +107,57 @@ const handleFunctionCall = async (
         if (lastMessage) {
           lastMessage.isStreaming = false;
           lastMessage.content = lastMessage.content + pendingContent;
-          lastMessage.processingTool = {
-            name,
-            status: "preparing",
-            functionCall: JSON.stringify(
-              { tool_name: name, arguments: args },
-              null,
-              2
-            ),
-          };
+          if (lastMessage.processingTool) {
+            lastMessage.processingTool = {
+              ...lastMessage.processingTool,
+              name,
+              status: "preparing",
+              functionCall: JSON.stringify(
+                { tool_name: name, arguments: args },
+                null,
+                2
+              ),
+            };
+          } else {
+            lastMessage.processingTool = {
+              name,
+              status: "preparing",
+              functionCall: JSON.stringify(
+                { tool_name: name, arguments: args },
+                null,
+                2
+              ),
+            };
+          }
         }
         logMessageHistory(newMessages, "Before Tool Call - Preparing");
         return newMessages;
       });
     }
 
+    // Check if aborted after setting up the tool
+    if (abortSignal?.aborted) {
+      console.log("[handleFunctionCall] Aborted before calling tool");
+      return false;
+    }
+
+    // Add a delay to make the "preparing" state visible
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Check if aborted after delay
+    if (abortSignal?.aborted) {
+      console.log("[handleFunctionCall] Aborted after preparing delay");
+      return false;
+    }
+
     const result = await handlers.onFunctionCall(name, args);
+    
+    // Check if aborted after tool call
+    if (abortSignal?.aborted) {
+      console.log("[handleFunctionCall] Aborted after tool call");
+      return false;
+    }
+    
     await handleToolResult(
       result,
       messages,
@@ -228,6 +269,12 @@ export const streamCompletion = async (
   };
 
   try {
+    // Check if already aborted before starting
+    if (abortSignal?.aborted) {
+      console.log("[streamCompletion] Already aborted before starting");
+      throw new Error("AbortError");
+    }
+
     const response = await makeApiRequest(
       messages,
       sessionId,
@@ -263,6 +310,12 @@ export const streamCompletion = async (
       }
     }
 
+    // Check if aborted during streaming
+    if (abortSignal?.aborted) {
+      console.log("[streamCompletion] Aborted during streaming");
+      throw new Error("AbortError");
+    }
+
     if (parser.pendingContent && !parser.foundFunctionCall) {
       onChunk(parser.pendingContent);
       if (setMessages) {
@@ -277,12 +330,53 @@ export const streamCompletion = async (
         });
       }
     }
+    
+    // Clean up any dangling tool badges when the stream completes
+    if (setMessages) {
+      setMessages((prev) => {
+        const newMessages = [...prev];
+        const lastMessage = newMessages[newMessages.length - 1];
+        
+        // If the last message has a processingTool with status "preparing" but no actual function call was completed,
+        // remove the processingTool property
+        if (lastMessage && 
+            lastMessage.processingTool && 
+            lastMessage.processingTool.status === "preparing" && 
+            lastMessage.processingTool.name === "tool") {
+          delete lastMessage.processingTool;
+        }
+        
+        return newMessages;
+      });
+    }
   } catch (error) {
+    // Handle abort errors
     if (
       error instanceof Error &&
       (error.name === "AbortError" || error.message === "AbortError")
     ) {
       console.log("[streamCompletion] Request aborted");
+      
+      // Update UI to reflect the abort
+      if (setMessages) {
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage?.isStreaming) {
+            lastMessage.isStreaming = false;
+          }
+          
+          // Clean up any dangling tool badges when aborted
+          if (lastMessage && 
+              lastMessage.processingTool && 
+              lastMessage.processingTool.status === "preparing") {
+            delete lastMessage.processingTool;
+          }
+          
+          return newMessages;
+        });
+      }
+      
       return;
     }
     console.error("[streamCompletion] Error:", error);
@@ -299,6 +393,12 @@ const handleToolResult = async (
   abortSignal?: AbortSignal | null
 ) => {
   if (!setMessages || !onChunk || !modelId) return;
+  
+  // Check if the request has been aborted before proceeding
+  if (abortSignal?.aborted) {
+    console.log("[handleToolResult] Aborted before starting follow-up");
+    return;
+  }
 
   const toolResultMessage: ChatMessage = {
     id: crypto.randomUUID(),
@@ -322,15 +422,45 @@ const handleToolResult = async (
     return newMessages;
   });
 
-  await streamCompletion(
-    messages.concat(toolResultMessage, followUpMessage),
-    null,
-    abortSignal,
-    onChunk,
-    modelId,
-    undefined,
-    setMessages
-  );
+  // Add a special instruction to the tool result message to avoid repetition
+  const modifiedToolResult = {
+    ...toolResultMessage,
+    content: `Tool result: ${JSON.stringify(result)}\n\nContinue from your previous response. Do not repeat your initial greeting or restate that you're going to use a tool. Focus on presenting the results of the tool execution in a natural way.`
+  };
+
+  try {
+    await streamCompletion(
+      messages.concat(modifiedToolResult, followUpMessage),
+      null,
+      abortSignal,
+      onChunk,
+      modelId,
+      undefined,
+      setMessages
+    );
+  } catch (error) {
+    // Handle abort errors in the tool result follow-up
+    if (
+      error instanceof Error &&
+      (error.name === "AbortError" || error.message === "AbortError")
+    ) {
+      console.log("[handleToolResult] Follow-up request aborted");
+      
+      // Update the UI to show the abort
+      if (setMessages) {
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage?.isStreaming) {
+            lastMessage.isStreaming = false;
+          }
+          return newMessages;
+        });
+      }
+      return;
+    }
+    throw error;
+  }
 };
 
 export const summarizeConversation = async (

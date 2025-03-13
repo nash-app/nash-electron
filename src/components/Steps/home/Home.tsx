@@ -217,6 +217,9 @@ const useToolHandler = (
           return newMessages;
         });
 
+        // Add a delay to make the "calling" state visible
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         console.log("[handleToolCall] Making request to tool endpoint");
         const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
           method: "POST",
@@ -252,6 +255,10 @@ const useToolHandler = (
       } catch (error) {
         console.error("[handleToolCall] Error:", error);
         
+        // Check if this is an abort error
+        const isAbortError = error instanceof Error && 
+          (error.name === "AbortError" || error.message === "AbortError");
+        
         setMessages((prev) => {
           const newMessages = [...prev];
           const lastMessage = newMessages[newMessages.length - 1];
@@ -259,7 +266,9 @@ const useToolHandler = (
             lastMessage.processingTool = {
               ...lastMessage.processingTool,
               status: "completed",
-              response: JSON.stringify({ error: error.message }, null, 2)
+              response: isAbortError 
+                ? JSON.stringify({ error: "Tool call was cancelled" }, null, 2)
+                : JSON.stringify({ error: error.message }, null, 2)
             };
           }
           return newMessages;
@@ -293,9 +302,19 @@ const useChatInteraction = (
       console.log("[handleStop] Aborting current stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+      
+      // Ensure the UI is updated to reflect the abort
+      chatState.updateLastMessage((msg) => ({
+        ...msg,
+        isStreaming: false,
+      }));
     }
+    
+    // Always reset the tool processing flag to ensure we can start new requests
     chatState.isProcessingToolRef.current = false;
-  }, [chatState.isProcessingToolRef]);
+    
+    console.log("[handleStop] Stream aborted and state reset");
+  }, [chatState]);
 
   const handleSubmit = useCallback(
     async (input: string) => {
