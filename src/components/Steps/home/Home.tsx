@@ -19,7 +19,7 @@ import {
   ChevronDown,
   User,
 } from "lucide-react";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import nashLogoWhite from "../../../../public/nash-logo-white.svg";
 import { cn } from "../../../lib/utils";
 import { ChatContainer } from "../../ui/chat-container";
@@ -125,26 +125,277 @@ const logMessageHistory = (messages: ChatMessage[], context: string) => {
   console.log("\n================================\n");
 };
 
-export function Home({ onNavigate }: ChatProps): React.ReactElement {
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+// Custom hook for managing chat state
+const useChatState = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>(
     {}
   );
+  const [isProcessingToolRef] = useState<{ current: boolean }>({
+    current: false,
+  });
+
+  const addMessage = useCallback((message: ChatMessage) => {
+    setMessages((prev) => [...prev, message]);
+  }, []);
+
+  const updateLastMessage = useCallback(
+    (updater: (message: ChatMessage) => ChatMessage) => {
+      setMessages((prev) => {
+        const newMessages = [...prev];
+        const lastMessage = newMessages[newMessages.length - 1];
+        if (lastMessage) {
+          newMessages[newMessages.length - 1] = updater(lastMessage);
+        }
+        return newMessages;
+      });
+    },
+    []
+  );
+
+  const toggleToolExpand = useCallback((messageId: string) => {
+    setExpandedTools((prev) => ({
+      ...prev,
+      [messageId]: !prev[messageId],
+    }));
+  }, []);
+
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    setSessionId(null);
+  }, []);
+
+  return {
+    messages,
+    setMessages,
+    sessionId,
+    setSessionId,
+    expandedTools,
+    isProcessingToolRef,
+    addMessage,
+    updateLastMessage,
+    toggleToolExpand,
+    clearMessages,
+  };
+};
+
+// Custom hook for managing tool calls
+const useToolHandler = (
+  setMessages: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void,
+  isProcessingToolRef: { current: boolean }
+) => {
+  const handleToolCall = useCallback(
+    async (name: string, args: Record<string, any>) => {
+      if (isProcessingToolRef.current) {
+        console.log("[handleToolCall] Tool call already in progress, skipping");
+        return;
+      }
+      isProcessingToolRef.current = true;
+
+      console.log("[handleToolCall] Starting tool call:", { name, args });
+
+      try {
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage) {
+            console.log(
+              "[handleToolCall] Setting tool processing state for message:",
+              lastMessage.id
+            );
+            lastMessage.processingTool = {
+              name,
+              status: "calling",
+              functionCall: JSON.stringify(
+                { tool_name: name, arguments: args },
+                null,
+                2
+              ),
+            };
+          }
+          return newMessages;
+        });
+
+        console.log("[handleToolCall] Making request to tool endpoint");
+        const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tool_name: name, arguments: args }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Tool call failed: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        console.log("[handleToolCall] Tool call successful, result:", result);
+        return result;
+      } catch (error) {
+        console.error("[handleToolCall] Error:", error);
+        throw error;
+      } finally {
+        isProcessingToolRef.current = false;
+      }
+    },
+    [setMessages, isProcessingToolRef]
+  );
+
+  return handleToolCall;
+};
+
+// Custom hook for managing chat interactions
+const useChatInteraction = (
+  selectedModel: string,
+  chatState: ReturnType<typeof useChatState>
+) => {
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const currentContentRef = useRef("");
+  const handleToolCall = useToolHandler(
+    chatState.setMessages,
+    chatState.isProcessingToolRef
+  );
+
+  const handleStop = useCallback(() => {
+    if (abortControllerRef.current) {
+      console.log("[handleStop] Aborting current stream");
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    chatState.isProcessingToolRef.current = false;
+  }, [chatState.isProcessingToolRef]);
+
+  const handleSubmit = useCallback(
+    async (input: string) => {
+      if (!input.trim() || !selectedModel) {
+        console.log("[handleSubmit] Submission blocked:", {
+          hasInput: !!input.trim(),
+          hasModel: !!selectedModel,
+        });
+        return;
+      }
+
+      console.log(
+        "[handleSubmit] Starting submission with model:",
+        selectedModel
+      );
+
+      const userMessage: ChatMessage = {
+        id: uuidv4(),
+        role: "user",
+        content: input.trim(),
+        timestamp: new Date(),
+      };
+
+      const assistantMessage: ChatMessage = {
+        id: uuidv4(),
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isStreaming: true,
+      };
+
+      chatState.addMessage(userMessage);
+      chatState.addMessage(assistantMessage);
+      currentContentRef.current = "";
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      console.log("[handleSubmit] Created new AbortController");
+
+      try {
+        await streamCompletion(
+          [...chatState.messages, userMessage, assistantMessage],
+          chatState.sessionId,
+          controller.signal,
+          (chunk, newSessionId) => {
+            if (newSessionId) {
+              chatState.setSessionId(newSessionId);
+              return;
+            }
+            chatState.updateLastMessage((msg) => ({
+              ...msg,
+              content: (msg.content || "") + chunk,
+            }));
+          },
+          selectedModel,
+          handleToolCall,
+          chatState.setMessages
+        );
+      } catch (error) {
+        console.error("[handleSubmit] Error in chat stream:", error);
+
+        if (error instanceof Error && error.name !== "AbortError") {
+          chatState.updateLastMessage((msg) => ({
+            ...msg,
+            content: "Sorry, there was an error processing your request.",
+            isStreaming: false,
+          }));
+        } else {
+          chatState.updateLastMessage((msg) => ({
+            ...msg,
+            isStreaming: false,
+          }));
+          console.log("[handleSubmit] Request was aborted");
+        }
+      } finally {
+        abortControllerRef.current = null;
+      }
+    },
+    [selectedModel, chatState, handleToolCall]
+  );
+
+  const handleSummarize = useCallback(async () => {
+    if (chatState.messages.length === 0) return;
+
+    try {
+      const result = await summarizeConversation(
+        chatState.messages,
+        chatState.sessionId
+      );
+
+      if (result.success) {
+        const summaryMessage: ChatMessage = {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: "**Conversation Summary:**\n\n" + result.summary,
+          timestamp: new Date(),
+        };
+
+        chatState.setMessages([summaryMessage]);
+
+        if (result.session_id) {
+          chatState.setSessionId(result.session_id);
+        }
+      }
+    } catch (error) {
+      console.error("[handleSummarize] Error:", error);
+    }
+  }, [chatState]);
+
+  return {
+    handleSubmit,
+    handleStop,
+    handleSummarize,
+    isSubmitting: !!abortControllerRef.current,
+  };
+};
+
+export function Home({ onNavigate }: ChatProps): React.ReactElement {
+  const [input, setInput] = useState("");
   const [configAlerts, setConfigAlerts] = useState<ConfigAlert[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
     new Set()
   );
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const currentContentRef = useRef("");
-  const isProcessingToolRef = useRef(false);
+
+  const chatState = useChatState();
+  const { handleSubmit, handleStop, handleSummarize, isSubmitting } =
+    useChatInteraction(selectedModel, chatState);
 
   // Load configured providers on mount
-  React.useEffect(() => {
+  useEffect(() => {
     const loadConfiguredProviders = async () => {
       console.log(
         "[loadConfiguredProviders] Loading provider configurations..."
@@ -200,7 +451,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   }, []);
 
   // Monitor selected model changes
-  React.useEffect(() => {
+  useEffect(() => {
     if (selectedModel) {
       console.log("[modelChangeMonitor] Model changed to:", selectedModel);
       const model = ALL_MODELS.find((m) => m.id === selectedModel);
@@ -238,252 +489,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
     }
   }, [selectedModel, configuredProviders]);
 
-  const handleToolCall = useCallback(
-    async (name: string, args: Record<string, any>) => {
-      if (isProcessingToolRef.current) {
-        console.log("[handleToolCall] Tool call already in progress, skipping");
-        return;
-      }
-      isProcessingToolRef.current = true;
-
-      console.log("[handleToolCall] Starting tool call:", { name, args });
-
-      try {
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage) {
-            console.log(
-              "[handleToolCall] Setting tool processing state for message:",
-              lastMessage.id
-            );
-            lastMessage.processingTool = {
-              name,
-              status: "calling",
-              functionCall: JSON.stringify(
-                { tool_name: name, arguments: args },
-                null,
-                2
-              ),
-            };
-          }
-          return newMessages;
-        });
-
-        console.log("[handleToolCall] Making request to tool endpoint");
-        const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tool_name: name, arguments: args }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Tool call failed: ${response.statusText}`);
-        }
-
-        const result = await response.json();
-        console.log("[handleToolCall] Tool call successful, result:", result);
-
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage?.processingTool) {
-            console.log(
-              "[handleToolCall] Updating tool status to completed for message:",
-              lastMessage.id
-            );
-            lastMessage.processingTool = {
-              ...lastMessage.processingTool,
-              status: "completed",
-              response: JSON.stringify(result, null, 2),
-            };
-          }
-          return newMessages;
-        });
-
-        return result;
-      } catch (error) {
-        console.error("[handleToolCall] Error:", error);
-        setMessages((prev) => {
-          const lastMessage = prev[prev.length - 1];
-          if (lastMessage?.processingTool) {
-            lastMessage.processingTool = {
-              ...lastMessage.processingTool,
-              status: "completed",
-              response: JSON.stringify({ error: error.message }, null, 2),
-            };
-          }
-          return prev;
-        });
-        throw error;
-      } finally {
-        isProcessingToolRef.current = false;
-      }
-    },
-    []
-  );
-
-  const handleStop = useCallback(() => {
-    if (abortControllerRef.current) {
-      console.log("[handleStop] Aborting current stream");
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    isProcessingToolRef.current = false;
-    setIsLoading(false);
-  }, []);
-
-  const handleSubmit = useCallback(async () => {
-    if (
-      !input.trim() ||
-      isLoading ||
-      configuredProviders.size === 0 ||
-      !selectedModel
-    ) {
-      console.log("[handleSubmit] Submission blocked:", {
-        hasInput: !!input.trim(),
-        isLoading,
-        hasProviders: configuredProviders.size > 0,
-        hasModel: !!selectedModel,
-      });
-      return;
-    }
-
-    console.log(
-      "[handleSubmit] Starting submission with model:",
-      selectedModel
-    );
-    const userMessage: ChatMessage = {
-      id: uuidv4(),
-      role: "user",
-      content: input.trim(),
-      timestamp: new Date(),
-    };
-
-    const assistantMessage: ChatMessage = {
-      id: uuidv4(),
-      role: "assistant",
-      content: "",
-      timestamp: new Date(),
-      isStreaming: true,
-    };
-
-    const updatedMessages = [...messages, userMessage, assistantMessage];
-    setMessages(updatedMessages);
-    setIsLoading(true);
-    setInput("");
-    currentContentRef.current = "";
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-    console.log("[handleSubmit] Created new AbortController");
-
-    try {
-      await streamCompletion(
-        updatedMessages,
-        sessionId,
-        controller.signal,
-        (chunk, newSessionId) => {
-          if (newSessionId) {
-            setSessionId(newSessionId);
-            return;
-          }
-
-          setMessages((prevMessages) => {
-            const lastMessage = prevMessages[prevMessages.length - 1];
-            if (lastMessage?.role === "assistant" && lastMessage.isStreaming) {
-              return prevMessages.map((msg) =>
-                msg.id === lastMessage.id
-                  ? { ...msg, content: (msg.content || "") + chunk }
-                  : msg
-              );
-            }
-            return prevMessages;
-          });
-        },
-        selectedModel,
-        (name, args) => handleToolCall(name, args),
-        setMessages
-      );
-    } catch (error) {
-      console.error("Error in chat stream:", error);
-
-      if (error instanceof Error && error.name !== "AbortError") {
-        setMessages((prev) => {
-          const lastMessage = prev[prev.length - 1];
-          if (lastMessage.role === "assistant" && lastMessage.isStreaming) {
-            return prev.map((msg) =>
-              msg.id === lastMessage.id
-                ? {
-                    ...msg,
-                    content:
-                      "Sorry, there was an error processing your request.",
-                    isStreaming: false,
-                  }
-                : msg
-            );
-          }
-          return prev;
-        });
-      } else {
-        setMessages((prev) => {
-          const lastMessage = prev[prev.length - 1];
-          if (lastMessage.role === "assistant" && lastMessage.isStreaming) {
-            return prev.map((msg) =>
-              msg.id === lastMessage.id
-                ? {
-                    ...msg,
-                    isStreaming: false,
-                  }
-                : msg
-            );
-          }
-          return prev;
-        });
-        console.log("[handleSubmit] Request was aborted");
-      }
-    } finally {
-      setIsLoading(false);
-      abortControllerRef.current = null;
-    }
-  }, [
-    input,
-    isLoading,
-    messages,
-    sessionId,
-    handleToolCall,
-    selectedModel,
-    configuredProviders,
-  ]);
-
-  const handleSummarize = useCallback(async () => {
-    if (isLoading || messages.length === 0) return;
-
-    setIsLoading(true);
-    try {
-      const result = await summarizeConversation(messages, sessionId);
-
-      if (result.success) {
-        const summaryMessage: ChatMessage = {
-          id: Date.now().toString(),
-          role: "assistant",
-          content: "**Conversation Summary:**\n\n" + result.summary,
-          timestamp: new Date(),
-        };
-
-        setMessages([summaryMessage]);
-
-        if (result.session_id) {
-          setSessionId(result.session_id);
-        }
-      }
-    } catch (error) {
-      console.error("Error summarizing conversation:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [messages, sessionId, isLoading]);
-
   return (
     <div className="flex flex-col h-full">
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />
@@ -497,14 +502,9 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
           autoScroll={true}
         >
           <ChatMessages
-            messages={messages}
-            expandedTools={expandedTools}
-            onToggleToolExpand={(messageId: string) =>
-              setExpandedTools((prev) => ({
-                ...prev,
-                [messageId]: !prev[messageId],
-              }))
-            }
+            messages={chatState.messages}
+            expandedTools={chatState.expandedTools}
+            onToggleToolExpand={chatState.toggleToolExpand}
           />
         </ChatContainer>
 
@@ -513,8 +513,11 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
             <PromptInput
               value={input}
               onValueChange={setInput}
-              isLoading={isLoading}
-              onSubmit={handleSubmit}
+              isLoading={isSubmitting}
+              onSubmit={() => {
+                handleSubmit(input);
+                setInput("");
+              }}
             >
               <PromptInputTextarea
                 placeholder={
@@ -522,7 +525,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                     ? "Please add an API key to start chatting..."
                     : "Ask me anything..."
                 }
-                disabled={isLoading || configuredProviders.size === 0}
+                disabled={isSubmitting || configuredProviders.size === 0}
                 className="!h-[100px] !rounded-md"
               />
               <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
@@ -535,34 +538,38 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                   />
                 </div>
                 <div className="flex items-center gap-2">
-                  {messages.length > 0 && (
+                  {chatState.messages.length > 0 && (
                     <PromptInputAction tooltip="Summarize conversation">
                       <Button
                         variant="outline"
                         size="icon"
                         className="h-8 w-8 rounded-full"
                         onClick={handleSummarize}
-                        disabled={isLoading || messages.length === 0}
+                        disabled={
+                          isSubmitting || chatState.messages.length === 0
+                        }
                       >
                         <FileText className="h-4 w-4" />
                       </Button>
                     </PromptInputAction>
                   )}
                   <PromptInputAction
-                    tooltip={isLoading ? "Stop generation" : "Send message"}
+                    tooltip={isSubmitting ? "Stop generation" : "Send message"}
                   >
                     <Button
                       variant="default"
                       size="icon"
                       className="h-8 w-8 rounded-full"
-                      onClick={isLoading ? handleStop : handleSubmit}
+                      onClick={
+                        isSubmitting ? handleStop : () => handleSubmit(input)
+                      }
                       disabled={
-                        (!input.trim() && !isLoading) ||
+                        (!input.trim() && !isSubmitting) ||
                         configuredProviders.size === 0 ||
                         !selectedModel
                       }
                     >
-                      {isLoading ? (
+                      {isSubmitting ? (
                         <Square className="h-5 w-5" />
                       ) : (
                         <ArrowUp className="h-5 w-5" />
