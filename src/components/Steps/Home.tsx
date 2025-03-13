@@ -21,10 +21,9 @@ import nashLogoWhite from "../../../public/nash-logo-white.svg";
 import { cn } from "../../lib/utils";
 import { ChatContainer } from "../ui/chat-container";
 import {
-  NASH_LLM_SERVER_ENDPOINT,
-  NASH_LLM_SUMMARIZE_ENDPOINT,
-  NASH_MCP_ENDPOINT,
-  NASH_MCP_CALL_TOOL_ENDPOINT,
+  NASH_LOCAL_SERVER_CHAT_ENDPOINT,
+  NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
+  NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
 } from "../../constants";
 import {
   Select,
@@ -98,7 +97,6 @@ const ALL_MODELS: ProviderModel[] = [
 ];
 
 const getProviderConfig = async (modelId: string) => {
-  console.log("[getProviderConfig] Getting config for model:", modelId);
   const keys = await window.electron.getKeys();
   const modelConfigs = await window.electron.getModelConfigs() as ModelConfig[];
   
@@ -108,7 +106,7 @@ const getProviderConfig = async (modelId: string) => {
     throw new Error("Selected model not found.");
   }
 
-  console.log("[getProviderConfig] Found model:", { id: model.id, provider: model.provider });
+  
   const key = keys.find(k => k.provider === model.provider)?.value;
   const config = modelConfigs.find(c => c.provider === model.provider);
 
@@ -117,11 +115,7 @@ const getProviderConfig = async (modelId: string) => {
     throw new Error(`${model.provider.charAt(0).toUpperCase() + model.provider.slice(1)} API key not found. Please add your API key in the Models section.`);
   }
 
-  console.log("[getProviderConfig] Config loaded:", { 
-    provider: model.provider, 
-    hasKey: !!key, 
-    hasBaseUrl: !!config?.baseUrl 
-  });
+
 
   return {
     key,
@@ -131,15 +125,41 @@ const getProviderConfig = async (modelId: string) => {
   };
 };
 
+const logMessageHistory = (messages: ChatMessage[], context: string) => {
+  console.log("\n");
+  console.log("🔍 ================================");
+  console.log(`📝 MESSAGE HISTORY [${context}]`);
+  console.log("================================");
+  console.log("Total messages:", messages.length);
+  messages.forEach((msg, i) => {
+    console.log("\n-------------------");
+    console.log(`📨 Message ${i + 1}:`);
+    console.log("👤 Role:", msg.role);
+    console.log("🆔 ID:", msg.id);
+    console.log("📄 Content:", msg.content);
+    console.log("🔄 Is Streaming:", msg.isStreaming);
+    if (msg.processingTool) {
+      console.log("🛠  Tool:", {
+        name: msg.processingTool.name,
+        status: msg.processingTool.status,
+        functionCall: msg.processingTool.functionCall,
+        response: msg.processingTool.response
+      });
+    }
+  });
+  console.log("\n================================\n");
+};
+
 const streamCompletion = async (
-  messages: ChatMessage[],
-  sessionId: string | null,
-  abortSignal: AbortSignal | null,
-  onChunk: (chunk: string, sessionId?: string) => void,
-  modelId: string,
-  onFunctionCall?: (name: string, args: Record<string, any>) => void,
-  setMessages?: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void
+  messages: ChatMessage[],          // All messages in the conversation
+  sessionId: string | null,         // Session ID for continuity between requests
+  abortSignal: AbortSignal | null,  // Signal to abort the request
+  onChunk: (chunk: string, sessionId?: string) => void,  // Callback for streaming chunks
+  modelId: string,                  // ID of the LLM model to use
+  onFunctionCall?: (name: string, args: Record<string, any>) => void,  // Callback for tool calls
+  setMessages?: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void  // State updater
 ) => {
+  // Log initial information about the request
   console.log("[streamCompletion] Starting stream with model:", modelId);
   console.log("[streamCompletion] Initial messages:", messages.map(m => ({
     role: m.role,
@@ -149,54 +169,85 @@ const streamCompletion = async (
     processingTool: m.processingTool
   })));
   
-  let foundFunctionCall = false;
-  let functionCallContent = "";
-  let pendingContent = "";
+  // State variables for tracking function calls in the response
+  let foundFunctionCall = false;    // Flag to indicate if we found a function call
+  let functionCallContent = "";     // Buffer to collect function call content
+  let pendingContent = "";          // Buffer for regular content before sending to UI
 
+  // Helper function to prepare and send requests to the LLM server
   const makeRequest = async (messages: ChatMessage[], isFollowUp = false) => {
-    console.log(`[streamCompletion] ${isFollowUp ? 'Follow-up' : 'Initial'} request messages:`, 
-      messages.map(m => ({
-        role: m.role,
-        content: m.content,
-        id: m.id,
-        isStreaming: m.isStreaming,
-        processingTool: m.processingTool
-      }))
+    // Filter messages to only include completed ones (not streaming)
+    // For assistant messages, we need content and not streaming
+    // For user messages, we include all of them (including tool results)
+    const completedMessages = messages.filter(m => {
+      // For regular messages, only include non-streaming ones with content
+      if (m.role === 'assistant') {
+        return !m.isStreaming && m.content;
+      }
+      // Always include user messages, especially tool results
+      return m.role === 'user';
+    });
+    
+    // Convert to the format expected by the server
+    const messageHistory = completedMessages.map(m => ({
+      role: m.role,
+      content: m.content
+    }));
+
+    // Check if we have a tool result message (for debugging)
+    const hasToolResult = completedMessages.some(m => 
+      m.role === 'user' && m.content.startsWith('Tool result:')
     );
 
+    // Log the messages being sent to the server
+    console.log(`[streamCompletion] ${isFollowUp ? 'Follow-up' : 'Initial'} request messages:`, 
+      messageHistory.map((m, i) => ({
+        index: i,
+        role: m.role,
+        contentPreview: m.content.substring(0, 100) + (m.content.length > 100 ? '...' : '')
+      }))
+    );
+    
+    // Additional logging for follow-up requests
+    if (isFollowUp) {
+      console.log(`[streamCompletion] Has tool result message: ${hasToolResult}`);
+      console.log(`[streamCompletion] Total messages being sent: ${messageHistory.length}`);
+    }
+
+    // Get API configuration for the selected model
     const config = await getProviderConfig(modelId);
     const defaultBaseUrls: Record<string, string> = {
       anthropic: "https://api.anthropic.com",
       openai: "https://api.openai.com",
     };
     
+    // Use custom base URL if provided, otherwise use default
     const baseUrl = config.baseUrl || defaultBaseUrls[config.provider];
     
-    return fetch(NASH_LLM_SERVER_ENDPOINT, {
+    // Make the actual request to the LLM server
+    return fetch(NASH_LOCAL_SERVER_CHAT_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content
-        })),
-        session_id: sessionId,
-        api_key: config.key,
-        api_base_url: baseUrl,
-        model: config.model,
-        provider: config.provider
+        messages: messageHistory,      // The conversation history
+        session_id: sessionId,         // For continuity between requests
+        api_key: config.key,           // API key for the provider
+        api_base_url: baseUrl,         // Base URL for the provider's API
+        model: config.model,           // Model ID to use
+        provider: config.provider      // Provider (anthropic/openai)
       }),
-      signal: abortSignal || undefined,
+      signal: abortSignal || undefined, // For cancellation
     });
   };
 
   try {
-    // First request
+    // Make the initial request with all messages
     const response = await makeRequest(messages);
     console.log("[streamCompletion] Initial response:", response);
 
+    // Handle error responses
     if (!response.ok) {
       const errorText = await response.text().catch(() => "No error text available");
       console.error("[streamCompletion] Error response:", {
@@ -207,150 +258,210 @@ const streamCompletion = async (
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
+    // Get a reader for the response stream
     const reader = response.body?.getReader();
     if (!reader) {
       throw new Error("No reader available");
     }
 
+    // Set up decoding for the stream
     const decoder = new TextDecoder();
     let buffer = "";
 
+    // Process the stream chunk by chunk
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) break;  // End of stream
 
+      // Check if the request was aborted
+      if (abortSignal?.aborted) {
+        console.log("[streamCompletion] Main request aborted");
+        reader.cancel();
+        throw new Error("AbortError");
+      }
+
+      // Decode the chunk and add to buffer
       const decodedChunk = decoder.decode(value, { stream: true });
       buffer += decodedChunk;
+      
+      // Split buffer by newlines to process each SSE event
       const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+      buffer = lines.pop() || "";  // Keep the last incomplete line in buffer
 
+      // Process each line (SSE event)
       for (const line of lines) {
-        if (!line.trim()) continue;
+        if (!line.trim()) continue;  // Skip empty lines
+        
+        // SSE events start with "data: "
         if (line.startsWith("data: ")) {
           const data = line.slice(6); // Remove "data: " prefix
-          if (data === "[DONE]") break;
+          if (data === "[DONE]") break;  // End marker
 
           try {
+            // Parse the JSON data
             const parsed = JSON.parse(data);
 
+            // Handle session ID updates
             if (parsed.session_id) {
-              onChunk("", parsed.session_id);
+              onChunk("", parsed.session_id);  // Pass session ID to callback
               continue;
             }
 
+            // Skip if no content
             if (!parsed.content) continue;
 
+            // If we're collecting a function call, add to the buffer
             if (foundFunctionCall) {
               functionCallContent += parsed.content;
               
+              // Check if the function call is complete
               if (functionCallContent.includes("</function_call>")) {
+                // Extract the function call JSON
                 const functionCallMatch = functionCallContent.match(/<function_call>([^]*?)<\/function_call>/);
                 if (functionCallMatch && onFunctionCall) {
                   try {
+                    // Parse the function call
                     const functionCall = JSON.parse(functionCallMatch[1]) as FunctionCall[];
                     
                     if (functionCall.length > 0) {
+                      // Extract function name and arguments
                       const { name, arguments: args = {} } = functionCall[0].function;
                       
-                      // Set tool processing state and mark message as complete
+                      // Update the current assistant message with the function call
                       if (setMessages) {
                         setMessages((prev) => {
                           const newMessages = [...prev];
                           const lastMessage = newMessages[newMessages.length - 1];
                           if (lastMessage) {
+                            // Mark message as complete and add the function call
                             lastMessage.isStreaming = false;
+                            lastMessage.content = lastMessage.content + pendingContent;
                             lastMessage.processingTool = {
                               name,
                               status: "preparing",
                               functionCall: JSON.stringify({ tool_name: name, arguments: args }, null, 2)
                             };
-                            console.log("[streamCompletion] Updated initial message:", {
-                              id: lastMessage.id,
-                              content: lastMessage.content,
-                              isStreaming: lastMessage.isStreaming,
-                              processingTool: lastMessage.processingTool
-                            });
                           }
+                          // Log the messages before calling the tool
+                          logMessageHistory(newMessages, "Before Tool Call");
                           return newMessages;
                         });
                       }
 
-                      // Call the tool
-                      const toolResult = await onFunctionCall(name, args);
-                      
+                      // Call the tool and get the result
+                      const result = await onFunctionCall(name, args);
+                      console.log("[streamCompletion] Tool result:", result);
+
+                      // Create a message to represent the tool result
+                      const toolResultMessage: ChatMessage = {
+                        id: uuidv4(),
+                        role: "user",  // Tool results are sent as user messages
+                        content: `Tool result: ${JSON.stringify(result)}`,
+                        timestamp: new Date()
+                      };
+
                       // Create a new assistant message for the follow-up response
                       const followUpMessage: ChatMessage = {
                         id: uuidv4(),
                         role: "assistant",
                         content: "",
                         timestamp: new Date(),
-                        isStreaming: true,
+                        isStreaming: true,  // Mark as streaming
                       };
-
-                      console.log("[streamCompletion] Created follow-up message:", {
-                        id: followUpMessage.id,
-                        role: followUpMessage.role,
-                        content: followUpMessage.content,
-                        isStreaming: followUpMessage.isStreaming
-                      });
 
                       // Add the follow-up message to the UI
                       if (setMessages) {
                         setMessages(prev => {
                           const newMessages = [...prev, followUpMessage];
-                          console.log("[streamCompletion] Current messages after adding follow-up:", 
-                            newMessages.map(m => ({
-                              id: m.id,
-                              role: m.role,
-                              content: m.content,
-                              isStreaming: m.isStreaming,
-                              processingTool: m.processingTool
-                            }))
-                          );
+                          logMessageHistory(newMessages, "Before Follow-up Request");
                           return newMessages;
                         });
                       }
 
-                      // Create the tool result message (not shown in UI)
-                      const toolResultMessage: ChatMessage = {
-                        id: uuidv4(),
-                        role: "user",
-                        content: `Tool result: ${JSON.stringify(toolResult)}`,
-                        timestamp: new Date()
-                      };
-
-                      console.log("[streamCompletion] Tool result message:", {
-                        role: toolResultMessage.role,
-                        content: toolResultMessage.content,
-                        id: toolResultMessage.id
-                      });
-
-                      // Close the current reader to ensure we're done with the first response
+                      // Cancel the current stream since we're starting a new one
                       reader.cancel();
-
-                      // Make a new request with the tool result
-                      const followUpResponse = await makeRequest([...messages, toolResultMessage], true);
                       
+                      // Prepare messages for the follow-up request
+                      // 1. Get all user messages
+                      const userMessages = messages.filter(m => m.role === 'user');
+                      // 2. Get completed assistant messages with content
+                      const assistantMessages = messages.filter(m => 
+                        m.role === 'assistant' && !m.isStreaming && m.content
+                      );
+                      
+                      // 3. Combine all messages with the tool result at the end
+                      const messagesForRequest = [
+                        ...userMessages,
+                        ...assistantMessages,
+                        toolResultMessage  // Make sure the tool result is the last message
+                      ];
+                      
+                      // Log the tool result message
+                      console.log("[streamCompletion] Tool result message:", {
+                        id: toolResultMessage.id,
+                        role: toolResultMessage.role,
+                        content: toolResultMessage.content
+                      });
+                      
+                      // Log all messages being sent in the follow-up request
+                      console.log("[streamCompletion] Follow-up request will include messages:", 
+                        messagesForRequest.map(m => ({
+                          id: m.id,
+                          role: m.role,
+                          contentPreview: m.content.substring(0, 50) + (m.content.length > 50 ? '...' : '')
+                        }))
+                      );
+                      
+                      // Log the full message history
+                      logMessageHistory(messagesForRequest, "Follow-up Request Messages");
+                      
+                      // Verify that the tool result message is included
+                      const toolResultIncluded = messagesForRequest.some(m => 
+                        m.id === toolResultMessage.id
+                      );
+                      
+                      console.log(`[streamCompletion] Tool result message included: ${toolResultIncluded}`);
+                      
+                      // If somehow the tool result was filtered out, add it back
+                      if (!toolResultIncluded) {
+                        console.error("[streamCompletion] Tool result message was filtered out! Adding it back.");
+                        messagesForRequest.push(toolResultMessage);
+                      }
+                      
+                      // Make the follow-up request with the tool result
+                      const followUpResponse = await makeRequest(messagesForRequest, true);
+
+                      // Handle errors in the follow-up request
                       if (!followUpResponse.ok) {
                         throw new Error(`Follow-up request failed: ${followUpResponse.statusText}`);
                       }
 
+                      // Get a reader for the follow-up response
                       const followUpReader = followUpResponse.body?.getReader();
                       if (!followUpReader) {
                         throw new Error("No reader available for follow-up response");
                       }
 
-                      // Process the follow-up response
+                      // Process the follow-up response stream
                       let followUpBuffer = "";
                       while (true) {
                         const { done, value } = await followUpReader.read();
                         if (done) break;
 
+                        // Check if the request was aborted
+                        if (abortSignal?.aborted) {
+                          console.log("[streamCompletion] Follow-up request aborted");
+                          followUpReader.cancel();
+                          throw new Error("AbortError");
+                        }
+
+                        // Decode and process the chunk
                         const chunk = decoder.decode(value, { stream: true });
                         followUpBuffer += chunk;
                         const lines = followUpBuffer.split("\n");
                         followUpBuffer = lines.pop() || "";
 
+                        // Process each line in the follow-up response
                         for (const line of lines) {
                           if (!line.trim()) continue;
                           if (line.startsWith("data: ")) {
@@ -358,23 +469,18 @@ const streamCompletion = async (
                             if (data === "[DONE]") break;
 
                             try {
+                              // Parse and handle content chunks
                               const parsed = JSON.parse(data);
-                              console.log("[streamCompletion] Parsed data:", parsed);
                               if (parsed.content) {
-                                console.log("[streamCompletion] Parsed content:", parsed.content);
                                 if (setMessages) {
                                   setMessages((prev) => {
                                     const newMessages = [...prev];
                                     const lastMessage = newMessages[newMessages.length - 1];
                                     if (lastMessage?.isStreaming) {
-                                      // Prevent duplicate content by checking if content already exists
+                                      // Add content to the streaming message
+                                      // Prevent duplicate content
                                       if (!lastMessage.content.endsWith(parsed.content)) {
                                         lastMessage.content += parsed.content;
-                                        console.log("[streamCompletion] Updated follow-up message content:", {
-                                          id: lastMessage.id,
-                                          content: lastMessage.content,
-                                          isStreaming: lastMessage.isStreaming
-                                        });
                                       }
                                     }
                                     return newMessages;
@@ -395,60 +501,103 @@ const streamCompletion = async (
                           const lastMessage = newMessages[newMessages.length - 1];
                           if (lastMessage?.isStreaming) {
                             lastMessage.isStreaming = false;
+                            // Log the complete message history
+                            logMessageHistory(newMessages, "Tool Response Complete");
                           }
                           return newMessages;
                         });
                       }
 
+                      // Exit the function since we've handled the tool call
                       return;
                     }
                   } catch (e) {
-                    console.error("[streamCompletion] Error parsing function call:", e, "\nContent:", functionCallContent);
+                    // Handle errors in function call processing
+                    console.error("[streamCompletion] Error in tool handling:", e);
+                    foundFunctionCall = false;
+                    functionCallContent = "";
                   }
                 }
+                // Reset function call state if we couldn't process it
                 foundFunctionCall = false;
                 functionCallContent = "";
               }
-              continue;
+              continue;  // Continue collecting function call content
             }
 
+            // Add content to the pending buffer
             pendingContent += parsed.content;
             
+            // Check if this chunk contains the start of a function call
             const functionCallIndex = pendingContent.indexOf("<function_call>");
             
             if (functionCallIndex !== -1) {
+              // Found a function call
               foundFunctionCall = true;
               if (functionCallIndex > 0) {
+                // Send any content before the function call to the UI
                 const contentBeforeCall = pendingContent.substring(0, functionCallIndex);
                 console.log("[streamCompletion] Sending chunk to initial message:", contentBeforeCall);
                 onChunk(contentBeforeCall);
               }
+              // Start collecting the function call content
               functionCallContent = pendingContent.substring(functionCallIndex);
               pendingContent = "";
             } else {
-              // Only send complete words and prevent duplication
+              // No function call, just regular content
+              // Only send complete words to avoid cutting words in half
               const words = pendingContent.split(" ");
               if (words.length > 1) {
                 const completeContent = words.slice(0, -1).join(" ") + " ";
-                console.log("[streamCompletion] Sending chunk to initial message:", completeContent);
-                onChunk(completeContent);
-                pendingContent = words[words.length - 1];
+                onChunk(completeContent);  // Send complete words to UI
+                pendingContent = words[words.length - 1];  // Keep the last word for next time
               }
             }
           } catch (e) {
+            // Handle errors in SSE data parsing
             console.error("[streamCompletion] Error parsing SSE data:", e, "\nRaw data:", data);
           }
         }
       }
     }
 
+    // Handle any remaining content after the stream ends
     if (pendingContent && !foundFunctionCall) {
-      onChunk(pendingContent);
+      onChunk(pendingContent);  // Send remaining content to UI
+      if (setMessages) {
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage?.isStreaming) {
+            // Mark the message as complete
+            lastMessage.isStreaming = false;
+            console.log("[streamCompletion] Initial message completed:", {
+              id: lastMessage.id,
+              role: lastMessage.role,
+              content: lastMessage.content,
+              processingTool: lastMessage.processingTool
+            });
+            // Log the complete message history
+            logMessageHistory(newMessages, "Initial Message Complete");
+          }
+          return newMessages;
+        });
+      }
     }
   } catch (error) {
+    // Handle abort errors specially
     if (error instanceof Error && error.name === "AbortError") {
-      return;
+      console.log("[streamCompletion] Request aborted");
+      return;  // Just return silently for aborted requests
     }
+    
+    // For errors with the message "AbortError" (from our manual throws)
+    if (error instanceof Error && error.message === "AbortError") {
+      console.log("[streamCompletion] Request aborted (manual)");
+      return;  // Just return silently for aborted requests
+    }
+    
+    // Log and rethrow other errors
     console.error("[streamCompletion] Error:", error);
     throw error;
   }
@@ -458,7 +607,7 @@ async function summarizeConversation(
   messages: ChatMessage[],
   sessionId: string | null = null
 ) {
-  const endpoint = NASH_LLM_SUMMARIZE_ENDPOINT;
+  const endpoint = NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT;
 
   try {
     const response = await fetch(endpoint, {
@@ -487,29 +636,7 @@ async function summarizeConversation(
   }
 }
 
-async function callTool(method: string, args: any) {
-  const endpoint = `${NASH_MCP_ENDPOINT}/${method}`;
-  
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(args),
-    });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    return result;
-  } catch (error) {
-    console.error("Error calling tool:", error);
-    throw error;
-  }
-}
 
 export function Home({ onNavigate }: ChatProps): React.ReactElement {
   const [input, setInput] = useState("");
@@ -623,7 +750,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
         });
 
         console.log("[handleToolCall] Making request to tool endpoint");
-        const response = await fetch(NASH_MCP_CALL_TOOL_ENDPOINT, {
+        const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -711,16 +838,23 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       isStreaming: true,
     };
 
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    // Add both messages to the state
+    const updatedMessages = [...messages, userMessage, assistantMessage];
+    setMessages(updatedMessages);
     setIsLoading(true);
     setInput("");
     currentContentRef.current = "";
 
+    // Create a new AbortController for this request
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    console.log("[handleSubmit] Created new AbortController");
+
     try {
       await streamCompletion(
-        [...messages, userMessage],
+        updatedMessages,  // Use the updated messages array that already includes the new messages
         sessionId,
-        null,
+        controller.signal, // Pass the abort signal
         (chunk, newSessionId) => {
           if (newSessionId) {
             setSessionId(newSessionId);
@@ -747,7 +881,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       setMessages((prevMessages) => {
         const lastMessage = prevMessages[prevMessages.length - 1];
         if (lastMessage?.role === "assistant" && lastMessage.isStreaming) {
-          return prevMessages.map((msg) =>
+          const updatedMessages = prevMessages.map((msg) =>
             msg.id === lastMessage.id
               ? {
                   ...msg,
@@ -755,26 +889,49 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                 }
               : msg
           );
+          logMessageHistory(updatedMessages, "Final Message Complete");
+          return updatedMessages;
         }
         return prevMessages;
       });
     } catch (error) {
       console.error("Error in chat stream:", error);
-      setMessages((prev) => {
-        const lastMessage = prev[prev.length - 1];
-        if (lastMessage.role === "assistant" && lastMessage.isStreaming) {
-          return prev.map((msg) =>
-            msg.id === lastMessage.id
-              ? {
-                  ...msg,
-                  content: "Sorry, there was an error processing your request.",
-                  isStreaming: false,
-                }
-              : msg
-          );
-        }
-        return prev;
-      });
+      
+      // Only show error message if it wasn't an abort error
+      if (error instanceof Error && error.name !== "AbortError") {
+        setMessages((prev) => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage.role === "assistant" && lastMessage.isStreaming) {
+            return prev.map((msg) =>
+              msg.id === lastMessage.id
+                ? {
+                    ...msg,
+                    content: "Sorry, there was an error processing your request.",
+                    isStreaming: false,
+                  }
+                : msg
+            );
+          }
+          return prev;
+        });
+      } else {
+        // For abort errors, just mark the message as no longer streaming
+        setMessages((prev) => {
+          const lastMessage = prev[prev.length - 1];
+          if (lastMessage.role === "assistant" && lastMessage.isStreaming) {
+            return prev.map((msg) =>
+              msg.id === lastMessage.id
+                ? {
+                    ...msg,
+                    isStreaming: false,
+                  }
+                : msg
+            );
+          }
+          return prev;
+        });
+        console.log("[handleSubmit] Request was aborted");
+      }
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
