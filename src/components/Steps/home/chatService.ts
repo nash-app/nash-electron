@@ -305,6 +305,7 @@ const handleToolResult = async (
     role: "assistant",
     content: `Tool result: ${JSON.stringify(result)}`,
     timestamp: new Date(),
+    isToolResult: true,
   };
 
   const followUpMessage: ChatMessage = {

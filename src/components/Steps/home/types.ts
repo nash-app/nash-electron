@@ -6,6 +6,7 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   isStreaming?: boolean;
+  isToolResult?: boolean;
   processingTool?: {
     name: string;
     status: "preparing" | "calling" | "completed";
