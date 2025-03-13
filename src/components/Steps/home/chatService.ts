@@ -111,7 +111,7 @@ const handleFunctionCall = async (
             ),
           };
         }
-        logMessageHistory(newMessages, "Before Tool Call");
+        logMessageHistory(newMessages, "Before Tool Call - Preparing");
         return newMessages;
       });
     }
@@ -302,7 +302,7 @@ const handleToolResult = async (
 
   const toolResultMessage: ChatMessage = {
     id: crypto.randomUUID(),
-    role: "user",
+    role: "assistant",
     content: `Tool result: ${JSON.stringify(result)}`,
     timestamp: new Date(),
   };

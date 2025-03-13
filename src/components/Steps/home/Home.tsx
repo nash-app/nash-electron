@@ -201,7 +201,7 @@ const useToolHandler = (
           const lastMessage = newMessages[newMessages.length - 1];
           if (lastMessage) {
             console.log(
-              "[handleToolCall] Setting tool processing state for message:",
+              "[handleToolCall] Setting tool calling state for message:",
               lastMessage.id
             );
             lastMessage.processingTool = {
@@ -230,9 +230,41 @@ const useToolHandler = (
 
         const result = await response.json();
         console.log("[handleToolCall] Tool call successful, result:", result);
+        
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage?.processingTool) {
+            console.log(
+              "[handleToolCall] Setting tool completed state for message:",
+              lastMessage.id
+            );
+            lastMessage.processingTool = {
+              ...lastMessage.processingTool,
+              status: "completed",
+              response: JSON.stringify(result, null, 2)
+            };
+          }
+          return newMessages;
+        });
+
         return result;
       } catch (error) {
         console.error("[handleToolCall] Error:", error);
+        
+        setMessages((prev) => {
+          const newMessages = [...prev];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage?.processingTool) {
+            lastMessage.processingTool = {
+              ...lastMessage.processingTool,
+              status: "completed",
+              response: JSON.stringify({ error: error.message }, null, 2)
+            };
+          }
+          return newMessages;
+        });
+        
         throw error;
       } finally {
         isProcessingToolRef.current = false;
