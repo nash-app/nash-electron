@@ -1,11 +1,11 @@
 import * as React from "react";
-import { cn } from "../../../lib/utils";
-import { ChatMessage } from "./types";
-import { Message, MessageContent } from "../../ui/message";
-import { Avatar } from "../../ui/avatar";
-import { Badge } from "../../ui/badge";
+import { cn } from "../../../../lib/utils";
+import { ChatMessage } from "../types";
+import { Message, MessageContent } from "../../../ui/message";
+import { Avatar } from "../../../ui/avatar";
+import { Badge } from "../../../ui/badge";
 import { User, ChevronRight, ChevronDown } from "lucide-react";
-import nashLogoWhite from "../../../../public/nash-logo-white.svg";
+import nashLogoWhite from "../../../../../public/nash-logo-white.svg";
 
 interface ChatMessagesProps {
   messages: ChatMessage[];

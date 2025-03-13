@@ -1,7 +1,7 @@
 import * as React from "react";
-import { cn } from "../../../lib/utils";
-import { ALL_MODELS } from "./constants";
-import { SetupStep } from "../../types";
+import { cn } from "../../../../lib/utils";
+import { ALL_MODELS } from "../constants";
+import { SetupStep } from "../../../types";
 import {
   Select,
   SelectContent,
@@ -10,9 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
   SelectLabel,
-} from "../../ui/select";
-import anthropicIcon from "../../../../public/models/anthropic.png";
-import openAIIcon from "../../../../public/models/openai.png";
+} from "../../../ui/select";
+import anthropicIcon from "../../../../../public/models/anthropic.png";
+import openAIIcon from "../../../../../public/models/openai.png";
 
 interface ModelSelectorProps {
   selectedModel: string;

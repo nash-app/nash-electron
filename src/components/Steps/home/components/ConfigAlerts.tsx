@@ -1,6 +1,6 @@
 import * as React from "react";
-import { ConfigAlert } from "./types";
-import { SetupStep } from "../../types";
+import { ConfigAlert } from "../types";
+import { SetupStep } from "../../../types";
 
 interface ConfigAlertsProps {
   alerts: ConfigAlert[];
