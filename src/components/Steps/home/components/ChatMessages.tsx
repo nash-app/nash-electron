@@ -18,9 +18,12 @@ export function ChatMessages({
   expandedTools,
   onToggleToolExpand,
 }: ChatMessagesProps) {
+  // Filter out tool result messages
+  const visibleMessages = messages.filter((message) => !message.isToolResult);
+
   return (
     <>
-      {messages.map((message) => (
+      {visibleMessages.map((message) => (
         <div key={message.id} className="flex flex-col gap-2">
           <Message>
             <Avatar className="h-[44px] w-[44px] rounded-lg">
@@ -42,8 +45,10 @@ export function ChatMessages({
                   : "bg-zinc-900 text-zinc-100"
               )}
             >
-              {message.role === "assistant" && message.isStreaming && !message.content 
-                ? "Thinking..." 
+              {message.role === "assistant" &&
+              message.isStreaming &&
+              !message.content
+                ? "Thinking..."
                 : message.content}
             </MessageContent>
           </Message>
