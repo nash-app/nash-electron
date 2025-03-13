@@ -60,7 +60,6 @@ export function MarkdownContent({ content, className }: MarkdownContentProps) {
         <SyntaxHighlighter
           style={vscDarkPlus}
           language={language}
-          PreTag="div"
           {...props}
         >
           {String(children).replace(/\n$/, "")}
@@ -98,6 +97,12 @@ export function MarkdownContent({ content, className }: MarkdownContentProps) {
         {children}
       </blockquote>
     ),
+    // Add a custom pre component to handle code blocks in paragraphs
+    pre: ({ children }: any) => {
+      // This ensures that pre elements (which contain code blocks) 
+      // are rendered outside of paragraph tags
+      return <div className="my-2">{children}</div>;
+    },
   };
   
   return (
