@@ -6,7 +6,7 @@ import { InstallStep } from "./components/Steps/InstallStep";
 import { ServicesStep } from "./components/Steps/ServicesStep";
 import { SecretsStep } from "./components/Steps/SecretsStep";
 import { TaskPage } from "./components/Steps/TaskPage";
-import { Home } from "./components/Steps/Home";
+import { Home } from "./components/Steps/home/Home";
 import { Models } from "./components/Steps/Models";
 import { Tools } from "./components/Steps/Tools";
 import { SetupStep } from "./components/types";
@@ -128,4 +128,3 @@ root.render(
     <App />
   </React.StrictMode>
 );
-
