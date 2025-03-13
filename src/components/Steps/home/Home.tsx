@@ -1,16 +1,16 @@
 import * as React from "react";
-import { SetupStep } from "../types";
-import { Header } from "../Header";
+import { SetupStep } from "../../types";
+import { Header } from "../../Header";
 import {
   PromptInput,
   PromptInputAction,
   PromptInputActions,
   PromptInputTextarea,
-} from "../ui/prompt-input";
-import { Message, MessageContent, MessageActions } from "../ui/message";
-import { Avatar } from "../ui/avatar";
-import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
+} from "../../ui/prompt-input";
+import { Message, MessageContent, MessageActions } from "../../ui/message";
+import { Avatar } from "../../ui/avatar";
+import { Button } from "../../ui/button";
+import { Badge } from "../../ui/badge";
 import {
   Square,
   ArrowUp,
@@ -21,13 +21,13 @@ import {
 } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import nashLogoWhite from "../../../public/nash-logo-white.svg";
-import { cn } from "../../lib/utils";
-import { ChatContainer } from "../ui/chat-container";
+import { cn } from "../../../lib/utils";
+import { ChatContainer } from "../../ui/chat-container";
 import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,
   NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
   NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
-} from "../../constants";
+} from "../../../constants";
 import {
   Select,
   SelectContent,
@@ -36,16 +36,16 @@ import {
   SelectTrigger,
   SelectValue,
   SelectLabel,
-} from "../ui/select";
+} from "../../ui/select";
 import anthropicIcon from "../../../public/models/anthropic.png";
 import openAIIcon from "../../../public/models/openai.png";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessage, ChatProps, ConfigAlert } from "./home/types";
-import { ModelSelector } from "./home/ModelSelector";
-import { ChatMessages } from "./home/ChatMessages";
-import { ConfigAlerts } from "./home/ConfigAlerts";
-import { ALL_MODELS } from "./home/constants";
-import { streamCompletion, summarizeConversation } from "./home/chatService";
+import { ChatMessage, ChatProps, ConfigAlert } from "./types";
+import { ModelSelector } from "./ModelSelector";
+import { ChatMessages } from "./ChatMessages";
+import { ConfigAlerts } from "./ConfigAlerts";
+import { ALL_MODELS } from "./constants";
+import { streamCompletion, summarizeConversation } from "./chatService";
 
 interface FunctionCall {
   function: {
