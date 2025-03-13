@@ -48,11 +48,15 @@ export function ChatMessages({
             >
               {message.role === "assistant" && message.isStreaming && !message.content ? (
                 <span className="text-zinc-400">Thinking...</span>
-              ) : (
+              ) : message.role === "assistant" && message.content ? (
                 <MarkdownContent 
                   content={message.content} 
                   className="prose prose-invert max-w-none" 
                 />
+              ) : (
+                <div className="prose prose-invert max-w-none">
+                  <p>{message.content}</p>
+                </div>
               )}
             </div>
           </Message>
