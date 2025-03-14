@@ -51,6 +51,14 @@ import { ALL_MODELS } from "./constants";
 import { streamCompletion, summarizeConversation } from "./chatService";
 import { getProviderConfig, logMessageHistory } from "./utils";
 
+// Define StreamHandlers interface locally
+interface StreamHandlers {
+  onChunk: (chunk: string, sessionId?: string) => void;
+  onToolCall?: (name: string, args: Record<string, any>) => Promise<any>;
+  setMessages?: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
+  onContent?: (content: string) => void;
+}
+
 interface ModelConfig {
   provider: string;
   baseUrl?: string;
@@ -75,17 +83,44 @@ const useChatState = () => {
   });
 
   const addMessage = useCallback((message: ChatMessage) => {
-    setMessages((prev) => [...prev, message]);
+    console.log("[useChatState] Adding message:", message.id, message.role);
+    setMessages((prev) => {
+      const newMessages = [...prev, message];
+      console.log("[useChatState] New messages state:", newMessages.map(m => ({ id: m.id, role: m.role })));
+      return newMessages;
+    });
   }, []);
 
   const updateLastMessage = useCallback(
     (updater: (message: ChatMessage) => ChatMessage) => {
       setMessages((prev) => {
+        console.log("[useChatState] updateLastMessage - Current messages:", 
+          prev.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) }))
+        );
+        
         const newMessages = [...prev];
-        const lastMessage = newMessages[newMessages.length - 1];
-        if (lastMessage) {
-          newMessages[newMessages.length - 1] = updater(lastMessage);
+        
+        // Find the last assistant message that is streaming
+        const lastAssistantIndex = newMessages.findIndex(
+          m => m.role === "assistant" && m.isStreaming === true
+        );
+        
+        if (lastAssistantIndex >= 0) {
+          console.log("[useChatState] Updating assistant message:", newMessages[lastAssistantIndex].id);
+          const updatedMessage = updater(newMessages[lastAssistantIndex]);
+          console.log("[useChatState] Updated content:", updatedMessage.content);
+          newMessages[lastAssistantIndex] = updatedMessage;
+        } else {
+          // Fallback to updating the last message
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage) {
+            console.log("[useChatState] Updating last message:", lastMessage.id);
+            newMessages[newMessages.length - 1] = updater(lastMessage);
+          } else {
+            console.warn("[useChatState] No message to update");
+          }
         }
+        
         return newMessages;
       });
     },
@@ -162,23 +197,15 @@ const useToolHandler = (
   return handleToolCall;
 };
 
-// Return type for the chat interaction hook
-type ChatInteractionHookResult = {
-  handleSubmit: (input: string) => Promise<void>;
-  handleStop: () => void;
-  handleSummarize: () => Promise<void>;
-  isSending: boolean;
-  setIsSending: React.Dispatch<React.SetStateAction<boolean>>;
-  isSubmitting: boolean;
-};
-
 // Custom hook for managing chat interactions
 const useChatInteraction = (
   selectedModel: string,
   chatState: ReturnType<typeof useChatState>
-): ChatInteractionHookResult => {
+) => {
   const abortControllerRef = useRef<AbortController | null>(null);
-  const [isSending, setIsSending] = useState(false);
+  const currentContentRef = useRef("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
   const handleToolCall = useToolHandler(
     chatState.setMessages,
     chatState.isProcessingToolRef
@@ -189,262 +216,210 @@ const useChatInteraction = (
       console.log("[handleStop] Aborting current stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-
-      // Ensure the UI is updated to reflect the abort
-      chatState.updateLastMessage((msg) => ({
-        ...msg,
-        isStreaming: false,
-      }));
     }
-
-    // Always reset the tool processing flag to ensure we can start new requests
     chatState.isProcessingToolRef.current = false;
-    setIsSending(false);
-
-    console.log("[handleStop] Stream aborted and state reset");
-  }, [chatState]);
+    setIsSubmitting(false);
+  }, [chatState.isProcessingToolRef]);
 
   const handleSubmit = useCallback(
     async (input: string) => {
-      if (isSending) {
-        console.log("[handleSubmit] Already sending a message, ignoring...");
+      if (!input.trim() || !selectedModel) {
+        console.log("[handleSubmit] Submission blocked:", {
+          hasInput: !!input.trim(),
+          hasModel: !!selectedModel,
+        });
         return;
       }
 
-      // Ignore empty submissions
-      if (!input.trim()) {
-        console.log("[handleSubmit] Empty message, ignoring...");
-        return;
-      }
+      setIsSubmitting(true);
+      
+      console.log(
+        "[handleSubmit] Starting submission with model:",
+        selectedModel
+      );
 
-      console.log("[handleSubmit] Starting message submission flow");
-      setIsSending(true);
+      const userMessage: ChatMessage = {
+        id: uuidv4(),
+        role: "user",
+        content: input.trim(),
+        timestamp: new Date(),
+      };
+
+      // Log the state before adding messages
+      console.log("[handleSubmit] Messages BEFORE adding user message:");
+      logMessageHistory(chatState.messages, "BEFORE_ADDING");
+
+      // Add the user message to the state
+      console.log("[handleSubmit] Adding user message:", userMessage.id);
+      chatState.addMessage(userMessage);
+      
+      // Create a new array with the user message added
+      // This ensures we have the updated messages immediately without waiting for state update
+      const updatedMessages = [...chatState.messages, userMessage];
+      
+      // Create an assistant message
+      const assistantMessage: ChatMessage = {
+        id: uuidv4(),
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isStreaming: true,
+      };
+      
+      // Add the assistant message to the state
+      console.log("[handleSubmit] Adding assistant message:", assistantMessage.id);
+      chatState.addMessage(assistantMessage);
+      
+      // Add the assistant message to our local array as well
+      updatedMessages.push(assistantMessage);
+      
+      // Log the updated messages array
+      console.log("[handleSubmit] Updated messages array:");
+      logMessageHistory(updatedMessages, "UPDATED_MESSAGES");
+      
+      currentContentRef.current = "";
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      console.log("[handleSubmit] Created new AbortController");
 
       try {
-        // Ensure chatState.messages is an array
-        if (!chatState.messages || !Array.isArray(chatState.messages)) {
-          console.error(
-            "[handleSubmit] Messages is not an array:",
-            chatState.messages
-          );
-          setIsSending(false);
-          return;
-        }
-
-        // Create a new user message
-        const userMessage: ChatMessage = {
-          id: uuidv4(),
-          role: "user",
-          content: input,
-          timestamp: new Date(),
-        };
-
-        // Create a new array with existing messages plus the new user message
-        // We do this instead of relying on the state update which is asynchronous
-        const messagesWithCurrentInput = [...chatState.messages, userMessage];
-
-        // Verify we have at least one message in the conversation
-        if (messagesWithCurrentInput.length === 0) {
-          const errorMessage = "Please type a message first before submitting.";
-          console.error("[handleSubmit]", errorMessage);
-          chatState.addMessage({
-            id: uuidv4(),
-            role: "assistant",
-            content: `Error: ${errorMessage}`,
-            timestamp: new Date(),
-          });
-          setIsSending(false);
-          return;
-        }
-
-        // Verify the first message is from a user
-        if (messagesWithCurrentInput[0].role !== "user") {
-          const errorMessage =
-            "The conversation must start with a user message. This is required by the AI provider. Please start a new conversation.";
-          console.error("[handleSubmit]", errorMessage);
-          chatState.addMessage({
-            id: uuidv4(),
-            role: "assistant",
-            content: `Error: ${errorMessage}`,
-            timestamp: new Date(),
-          });
-          setIsSending(false);
-          return;
-        }
-
-        // Now add the user message to the UI first
-        chatState.addMessage(userMessage);
-
-        // Create assistant message placeholder
-        const assistantMessage: ChatMessage = {
-          id: uuidv4(),
-          role: "assistant",
-          content: "",
-          timestamp: new Date(),
-          isStreaming: true,
-        };
-        chatState.addMessage(assistantMessage);
-
-        // Cancel any existing request
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-
-        // Create a new abort controller for this request
-        const controller = new AbortController();
-        abortControllerRef.current = controller;
-
+        console.log("[handleSubmit] Starting streamCompletion with messages:", 
+          updatedMessages.map(m => ({ id: m.id, role: m.role }))
+        );
+        
         // Create handlers object for streamCompletion
-        const handlers = {
-          onChunk: (chunk: string, sessionId?: string) => {
-            if (chunk) {
-              console.log("[handleSubmit] Received chunk:", chunk);
-
-              // Update the content of the latest message
-              chatState.updateLastMessage((msg) => {
-                // Only add unique content
-                if (msg.content && msg.content.endsWith(chunk)) {
-                  console.log(
-                    "[handleSubmit] Preventing duplicate chunk from being added"
-                  );
-                  return msg; // Don't modify message if chunk is already there
-                }
-                return {
-                  ...msg,
-                  content: (msg.content || "") + chunk,
+        const handlers: StreamHandlers = {
+          onChunk: (chunk: string, newSessionId?: string) => {
+            if (newSessionId) {
+              console.log("[handleSubmit] Received session ID:", newSessionId);
+              chatState.setSessionId(newSessionId);
+              return;
+            }
+            
+            console.log("[handleSubmit] Received chunk:", chunk);
+            
+            if (!chunk) {
+              console.log("[handleSubmit] Empty chunk received, skipping");
+              return;
+            }
+            
+            // Directly update the messages state
+            chatState.setMessages((prevMessages) => {
+              console.log("[handleSubmit] Updating messages state with chunk:", chunk);
+              console.log("[handleSubmit] Current messages:", 
+                prevMessages.map(m => ({ 
+                  id: m.id, 
+                  role: m.role, 
+                  content: m.content?.substring(0, 20),
+                  isStreaming: m.isStreaming
+                }))
+              );
+              
+              // Create a new array to avoid mutating the previous state
+              const newMessages = [...prevMessages];
+              
+              // Find the assistant message that is streaming
+              const assistantIndex = newMessages.findIndex(
+                m => m.role === "assistant" && m.isStreaming === true
+              );
+              
+              if (assistantIndex >= 0) {
+                // Get the assistant message
+                const assistantMessage = newMessages[assistantIndex];
+                console.log("[handleSubmit] Found assistant message to update:", assistantMessage.id);
+                console.log("[handleSubmit] Current content:", assistantMessage.content);
+                
+                // Create a new message object with the updated content
+                const updatedContent = (assistantMessage.content || "") + chunk;
+                newMessages[assistantIndex] = {
+                  ...assistantMessage,
+                  content: updatedContent
                 };
-              });
-            }
-
-            // If we get a new session ID, update it
-            if (sessionId) {
-              chatState.setSessionId(sessionId);
-            }
-          },
-          onContent: (content: string) => {
-            if (content) {
-              console.log("[handleSubmit] Received content:", content);
-
-              // Update the content of the latest message
-              chatState.updateLastMessage((msg) => {
-                // Only add unique content
-                if (msg.content && msg.content.endsWith(content)) {
-                  console.log(
-                    "[handleSubmit] Preventing duplicate content from being added"
-                  );
-                  return msg; // Don't modify message if content is already there
-                }
-                return {
-                  ...msg,
-                  content: (msg.content || "") + content,
-                };
-              });
-            }
+                
+                console.log("[handleSubmit] Updated assistant message content:", updatedContent);
+              } else {
+                console.warn("[handleSubmit] No assistant message found to update");
+                console.log("[handleSubmit] Messages:", newMessages);
+              }
+              
+              return newMessages;
+            });
           },
           onToolCall: handleToolCall,
-          setMessages: chatState.setMessages,
+          setMessages: chatState.setMessages
         };
-
-        const result = await streamCompletion(
-          messagesWithCurrentInput,
+        
+        // Use the updatedMessages array instead of chatState.messages
+        await streamCompletion(
+          updatedMessages,
           handlers,
           selectedModel,
           controller.signal,
           chatState.sessionId
         );
-
-        // Update session ID if a new one was returned
-        if (result.sessionId && result.sessionId !== chatState.sessionId) {
-          console.log("[handleSubmit] Updating session ID:", result.sessionId);
-          chatState.setSessionId(result.sessionId);
-        }
-
-        // At this point, the entire conversation flow (including any tool calls)
-        // should be complete, and the UI should be updated
-        console.log("[handleSubmit] Conversation flow completed");
+        
+        // Mark the assistant message as not streaming when the stream is complete
+        chatState.setMessages((prevMessages) => {
+          console.log("[handleSubmit] Stream complete, marking assistant message as not streaming");
+          
+          // Create a new array to avoid mutating the previous state
+          const newMessages = [...prevMessages];
+          
+          // Find the assistant message that is streaming
+          const assistantIndex = newMessages.findIndex(
+            m => m.role === "assistant" && m.isStreaming === true
+          );
+          
+          if (assistantIndex >= 0) {
+            // Get the assistant message
+            const assistantMessage = newMessages[assistantIndex];
+            console.log("[handleSubmit] Found assistant message to mark as complete:", assistantMessage.id);
+            
+            // Create a new message object with isStreaming set to false
+            newMessages[assistantIndex] = {
+              ...assistantMessage,
+              isStreaming: false
+            };
+            
+            console.log("[handleSubmit] Marked assistant message as complete");
+          }
+          
+          return newMessages;
+        });
       } catch (error) {
         console.error("[handleSubmit] Error in chat stream:", error);
 
-        if (error instanceof Error) {
-          const errorMessage =
-            error.name === "AbortError"
-              ? "Request was cancelled."
-              : `Error: ${
-                  error.message || "There was an error processing your request."
-                }`;
-
-          // Make sure we add an error message if no assistant message exists
-          const assistantIndex = chatState.messages.findIndex(
-            (msg) => msg.role === "assistant" && msg.isStreaming
-          );
-          const hasAssistantMessage = assistantIndex !== -1;
-
-          if (hasAssistantMessage) {
-            // Update the existing assistant message
-            chatState.updateLastMessage((msg) => ({
-              ...msg,
-              content: errorMessage,
-              isStreaming: false,
-            }));
-          } else {
-            // Add a new assistant message with the error
-            chatState.addMessage({
-              id: uuidv4(),
-              role: "assistant",
-              content: errorMessage,
-              timestamp: new Date(),
-            });
-          }
-
-          if (error.name !== "AbortError") {
-            console.error("[handleSubmit] Non-abort error:", error);
-          } else {
-            console.log("[handleSubmit] Request was aborted");
-          }
+        if (error instanceof Error && error.name !== "AbortError") {
+          chatState.updateLastMessage((msg) => ({
+            ...msg,
+            content: "Sorry, there was an error processing your request.",
+            isStreaming: false,
+          }));
         } else {
-          // Same pattern for unknown errors
-          const assistantIndex = chatState.messages.findIndex(
-            (msg) => msg.role === "assistant" && msg.isStreaming
-          );
-          const hasAssistantMessage = assistantIndex !== -1;
-
-          if (hasAssistantMessage) {
-            chatState.updateLastMessage((msg) => ({
-              ...msg,
-              content:
-                "Sorry, there was an unknown error processing your request.",
-              isStreaming: false,
-            }));
-          } else {
-            chatState.addMessage({
-              id: uuidv4(),
-              role: "assistant",
-              content:
-                "Sorry, there was an unknown error processing your request.",
-              timestamp: new Date(),
-            });
-          }
+          chatState.updateLastMessage((msg) => ({
+            ...msg,
+            isStreaming: false,
+          }));
+          console.log("[handleSubmit] Request was aborted");
         }
       } finally {
         abortControllerRef.current = null;
-        setIsSending(false);
+        setIsSubmitting(false);
+        
+        // Log the final state after completion
+        console.log("[handleSubmit] Messages AFTER completion:");
+        logMessageHistory(chatState.messages, "AFTER_COMPLETION");
       }
     },
-    [chatState, selectedModel, handleToolCall, isSending]
+    [selectedModel, chatState, handleToolCall]
   );
 
   const handleSummarize = useCallback(async () => {
-    if (
-      !chatState.messages ||
-      !Array.isArray(chatState.messages) ||
-      chatState.messages.length === 0
-    ) {
-      console.log("[handleSummarize] No messages to summarize");
-      return;
-    }
+    if (chatState.messages.length === 0) return;
 
     try {
-      setIsSending(true);
+      setIsSubmitting(true);
       const result = await summarizeConversation(
         chatState.messages,
         chatState.sessionId
@@ -467,17 +442,15 @@ const useChatInteraction = (
     } catch (error) {
       console.error("[handleSummarize] Error:", error);
     } finally {
-      setIsSending(false);
+      setIsSubmitting(false);
     }
-  }, [chatState, setIsSending]);
+  }, [chatState]);
 
   return {
     handleSubmit,
     handleStop,
     handleSummarize,
-    isSending,
-    setIsSending,
-    isSubmitting: !!abortControllerRef.current,
+    isSubmitting,
   };
 };
 
@@ -489,21 +462,10 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
     new Set()
   );
   const chatContainerRef = useRef<HTMLDivElement>(null);
-  const [showRawMessages, setShowRawMessages] = useState(false);
 
   const chatState = useChatState();
-
-  // Get the tool handler directly
-  const toolHandler = useToolHandler(
-    chatState.setMessages,
-    chatState.isProcessingToolRef
-  );
-
-  const { handleSubmit, handleStop, handleSummarize, isSending, setIsSending } =
+  const { handleSubmit, handleStop, handleSummarize, isSubmitting } =
     useChatInteraction(selectedModel, chatState);
-
-  // Toggle function for raw messages
-  const toggleRawMessages = () => setShowRawMessages(!showRawMessages);
 
   // Load configured providers on mount
   useEffect(() => {
@@ -599,37 +561,36 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       }
     }
   }, [selectedModel, configuredProviders]);
-
+  console.log("chatState.messages", chatState.messages);
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col h-full">
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />
-      <div className="flex-1 overflow-hidden relative flex flex-col">
-        <ChatContainer className="max-w-4xl mx-auto w-full flex-1">
-          <div className="flex h-full flex-col">
-            <div className="flex-1 overflow-y-auto w-full p-4">
-              <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
 
-              <ChatMessages
-                messages={chatState.messages}
-                expandedTools={chatState.expandedTools}
-                onToggleToolExpand={chatState.toggleToolExpand}
-                showRawMessages={showRawMessages}
-              />
-            </div>
-          </div>
+      <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <ChatContainer
+          ref={chatContainerRef}
+          className="flex-1 space-y-2 px-4 pt-8 max-w-4xl mx-auto w-full"
+          autoScroll={true}
+        >
+          <ChatMessages
+            messages={chatState.messages}
+            expandedTools={chatState.expandedTools}
+            onToggleToolExpand={chatState.toggleToolExpand}
+          />
         </ChatContainer>
-        {/* Fixed input area at the bottom */}
-        <div>
-          <div className="max-w-4xl mx-auto p-4">
+
+        <div className="p-4">
+          <div className="max-w-4xl mx-auto">
             <PromptInput
               value={input}
               onValueChange={setInput}
-              isLoading={isSending}
+              isLoading={isSubmitting}
               onSubmit={() => {
                 handleSubmit(input);
                 setInput("");
               }}
-              className="mt-2"
             >
               <PromptInputTextarea
                 placeholder={
@@ -637,7 +598,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                     ? "Please add an API key to start chatting..."
                     : "Ask me anything..."
                 }
-                disabled={isSending || configuredProviders.size === 0}
+                disabled={isSubmitting || configuredProviders.size === 0}
                 className="!h-[100px] !rounded-md"
               />
               <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
@@ -648,19 +609,9 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                     configuredProviders={configuredProviders}
                     onNavigate={onNavigate}
                   />
-
-                  {/* Debug button to toggle raw messages */}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 rounded-full text-xs"
-                    onClick={toggleRawMessages}
-                  >
-                    {showRawMessages ? "Hide Raw" : "Show Raw"}
-                  </Button>
                 </div>
                 <div className="flex items-center gap-2">
-                  {chatState.messages && chatState.messages.length > 0 && (
+                  {chatState.messages.length > 0 && (
                     <PromptInputAction tooltip="Summarize conversation">
                       <Button
                         variant="outline"
@@ -668,9 +619,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                         className="h-8 w-8 rounded-full"
                         onClick={handleSummarize}
                         disabled={
-                          isSending ||
-                          !chatState.messages ||
-                          chatState.messages.length === 0
+                          isSubmitting || chatState.messages.length === 0
                         }
                       >
                         <FileText className="h-4 w-4" />
@@ -678,22 +627,22 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                     </PromptInputAction>
                   )}
                   <PromptInputAction
-                    tooltip={isSending ? "Stop generation" : "Send message"}
+                    tooltip={isSubmitting ? "Stop generation" : "Send message"}
                   >
                     <Button
                       variant="default"
                       size="icon"
                       className="h-8 w-8 rounded-full"
                       onClick={
-                        isSending ? handleStop : () => handleSubmit(input)
+                        isSubmitting ? handleStop : () => handleSubmit(input)
                       }
                       disabled={
-                        (!input.trim() && !isSending) ||
+                        (!input.trim() && !isSubmitting) ||
                         configuredProviders.size === 0 ||
                         !selectedModel
                       }
                     >
-                      {isSending ? (
+                      {isSubmitting ? (
                         <Square className="h-5 w-5" />
                       ) : (
                         <ArrowUp className="h-5 w-5" />

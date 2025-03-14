@@ -61,6 +61,10 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
     throw new Error("Messages must be an array");
   }
 
+  console.log("[prepareMessagesForRequest] Processing messages:", 
+    messages.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) }))
+  );
+
   // Filter messages to only include completed messages, not streaming ones
   // and format them exactly as expected by the server
   const completedMessages = messages.filter((m) => {
@@ -71,8 +75,13 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
     return m.role === "user";
   });
 
+  console.log("[prepareMessagesForRequest] Filtered completed messages:", 
+    completedMessages.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) }))
+  );
+
   // Check if we have any messages at all
   if (completedMessages.length === 0) {
+    console.error("[prepareMessagesForRequest] No completed messages found");
     throw new Error(
       "No messages found for the conversation. At least one user message is required."
     );
@@ -80,6 +89,7 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
 
   // Check if the first message is from a user (required by Anthropic)
   if (completedMessages[0].role !== "user") {
+    console.error("[prepareMessagesForRequest] First message is not from user:", completedMessages[0]);
     throw new Error(
       "The first message must be from a user. This is required by Anthropic's API."
     );
@@ -726,6 +736,7 @@ export const streamCompletion = async (
   modelName: string | null = null
 ): Promise<{ success: boolean; sessionId: string | null }> => {
   console.log("[streamCompletion] Starting with sessionId:", sessionId);
+  console.log("[streamCompletion] Messages received:", messages.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) })));
 
   if (!messages || !Array.isArray(messages)) {
     console.error("[streamCompletion] Invalid messages:", messages);
@@ -734,16 +745,25 @@ export const streamCompletion = async (
 
   // Check if the last message is already an assistant message that's streaming
   const lastMessage = messages[messages.length - 1];
+  console.log("[streamCompletion] Last message:", { 
+    id: lastMessage?.id, 
+    role: lastMessage?.role, 
+    isStreaming: lastMessage?.isStreaming 
+  });
+  
   const hasAssistantMessage =
     lastMessage && lastMessage.role === "assistant" && lastMessage.isStreaming;
+  console.log("[streamCompletion] Has assistant message:", hasAssistantMessage);
 
   // Create a unique ID for the assistant's message if needed
   const assistantMessageId = hasAssistantMessage ? lastMessage.id : uuidv4();
+  console.log("[streamCompletion] Assistant message ID:", assistantMessageId);
 
   // Create a pending message for the assistant if needed
   let pendingAssistantMessage: ChatMessage | null = null;
 
   if (!hasAssistantMessage) {
+    console.log("[streamCompletion] Creating new assistant message");
     pendingAssistantMessage = {
       id: assistantMessageId,
       role: "assistant",
@@ -754,10 +774,22 @@ export const streamCompletion = async (
 
     // Add the assistant message placeholder
     if (handlers.setMessages) {
-      handlers.setMessages((prevMessages) => [
-        ...prevMessages,
-        pendingAssistantMessage!,
-      ]);
+      console.log("[streamCompletion] Adding new assistant message to state");
+      handlers.setMessages((prevMessages) => {
+        console.log("[streamCompletion] Previous messages:", prevMessages.map(m => ({ id: m.id, role: m.role })));
+        
+        // Check if we already have an assistant message with isStreaming=true
+        const existingAssistantIndex = prevMessages.findIndex(
+          m => m.role === "assistant" && m.isStreaming === true
+        );
+        
+        if (existingAssistantIndex >= 0) {
+          console.log("[streamCompletion] Found existing assistant message, not adding a new one");
+          return prevMessages;
+        }
+        
+        return [...prevMessages, pendingAssistantMessage!];
+      });
     }
   }
 
@@ -868,86 +900,105 @@ export const streamCompletion = async (
           try {
             // Parse the full event object
             const event = JSON.parse(eventData);
+            console.log("[streamCompletion] Parsed event:", event);
 
-            // If there's no content in this chunk, skip it
-            if (!event.delta?.content) {
-              continue;
-            }
-
-            const content = event.delta.content;
-            console.log("[streamCompletion] Content chunk:", content);
-
-            // Check for tool call markers
-            if (content.includes(TOOL_CALL_START_MARKER)) {
-              console.log("[streamCompletion] Tool call start detected");
-              inToolCall = true;
-
-              // Extract any content before the tool call
-              const beforeToolCall = content.split(TOOL_CALL_START_MARKER)[0];
-              if (beforeToolCall) {
-                handlers.onContent?.(beforeToolCall);
-                currentContent += beforeToolCall;
-              }
-
-              // Start collecting tool call content
-              toolCallContent = TOOL_CALL_START_MARKER;
-              toolCallContent += content.split(TOOL_CALL_START_MARKER)[1] || "";
-
-              // Check if we have a tool call marker and handler
-              if (handlers.onToolCall && handlers.setMessages) {
-                // Set the processing state
-                handlers.setMessages((prevMessages) => {
-                  const newMessages = [...prevMessages];
-                  const lastAssistantIndex = newMessages.findIndex(
-                    (m) => m.id === assistantMessageId
-                  );
-                  if (lastAssistantIndex >= 0) {
-                    newMessages[lastAssistantIndex].processingTool = {
-                      name: "Preparing...",
-                      status: "preparing",
-                      response: "",
-                    };
-                  }
-                  return newMessages;
-                });
-              }
-            } else if (inToolCall) {
-              // We're collecting a tool call
-              toolCallContent += content;
-
-              // Check if this chunk contains the end marker
-              if (content.includes(TOOL_CALL_END_MARKER)) {
-                console.log("[streamCompletion] Tool call end detected");
-                inToolCall = false;
-
-                // Process the tool call
-                const result = await handleToolCall(
-                  toolCallContent,
-                  currentContent,
-                  handlers,
-                  messages,
-                  modelId || modelName || "",
-                  abortSignal,
-                  sessionId
-                );
-
-                // Extract any content after the end marker
-                const afterEndMarker = content.split(TOOL_CALL_END_MARKER)[1];
-                if (afterEndMarker) {
-                  handlers.onContent?.(afterEndMarker);
-                  currentContent += afterEndMarker;
-                }
-
-                // Update session ID if it changed
-                if (result.sessionId) {
-                  sessionId = result.sessionId;
-                }
-              }
-            } else {
-              // Regular content
+            // If there's content in this chunk, process it
+            if (event.content) {
+              const content = event.content;
+              console.log("[streamCompletion] Content from event.content:", content);
+              
+              // Call the handlers with the content
               handlers.onContent?.(content);
               handlers.onChunk?.(content);
               currentContent += content;
+              continue;
+            }
+            
+            // If there's delta.content in this chunk, process it
+            if (event.delta?.content) {
+              const content = event.delta.content;
+              console.log("[streamCompletion] Content from event.delta.content:", content);
+
+              // Check for tool call markers
+              if (content.includes(TOOL_CALL_START_MARKER)) {
+                console.log("[streamCompletion] Tool call start detected");
+                inToolCall = true;
+
+                // Extract any content before the tool call
+                const beforeToolCall = content.split(TOOL_CALL_START_MARKER)[0];
+                if (beforeToolCall) {
+                  handlers.onContent?.(beforeToolCall);
+                  currentContent += beforeToolCall;
+                }
+
+                // Start collecting tool call content
+                toolCallContent = TOOL_CALL_START_MARKER;
+                toolCallContent += content.split(TOOL_CALL_START_MARKER)[1] || "";
+
+                // Check if we have a tool call marker and handler
+                if (handlers.onToolCall && handlers.setMessages) {
+                  // Set the processing state
+                  handlers.setMessages((prevMessages) => {
+                    const newMessages = [...prevMessages];
+                    const lastAssistantIndex = newMessages.findIndex(
+                      (m) => m.id === assistantMessageId
+                    );
+                    if (lastAssistantIndex >= 0) {
+                      newMessages[lastAssistantIndex].processingTool = {
+                        name: "Preparing...",
+                        status: "preparing",
+                        response: "",
+                      };
+                    }
+                    return newMessages;
+                  });
+                }
+              } else if (inToolCall) {
+                // We're collecting a tool call
+                toolCallContent += content;
+
+                // Check if this chunk contains the end marker
+                if (content.includes(TOOL_CALL_END_MARKER)) {
+                  console.log("[streamCompletion] Tool call end detected");
+                  inToolCall = false;
+
+                  // Process the tool call
+                  const result = await handleToolCall(
+                    toolCallContent,
+                    currentContent,
+                    handlers,
+                    messages,
+                    modelId || modelName || "",
+                    abortSignal,
+                    sessionId
+                  );
+
+                  // Extract any content after the end marker
+                  const afterEndMarker = content.split(TOOL_CALL_END_MARKER)[1];
+                  if (afterEndMarker) {
+                    handlers.onContent?.(afterEndMarker);
+                    currentContent += afterEndMarker;
+                  }
+
+                  // Update session ID if it changed
+                  if (result.sessionId) {
+                    sessionId = result.sessionId;
+                  }
+                }
+              } else {
+                // Regular content
+                console.log("[streamCompletion] Calling handlers with content:", content);
+                handlers.onContent?.(content);
+                handlers.onChunk?.(content);
+                currentContent += content;
+              }
+            } else if (event.session_id) {
+              // Handle session ID updates
+              console.log("[streamCompletion] Received session ID in event:", event.session_id);
+              sessionId = event.session_id;
+              handlers.onChunk?.("", event.session_id);
+            } else {
+              console.log("[streamCompletion] Event has no content or session_id:", event);
             }
           } catch (error) {
             console.error(
@@ -1078,6 +1129,7 @@ export const streamCompletion = async (
     if (handlers.setMessages) {
       handlers.setMessages((prevMessages) => {
         const newMessages = [...prevMessages];
+        console.log("TEST [streamCompletion] Updated messages:", newMessages, fullResponse);
         const assistantIndex = newMessages.findIndex(
           (m) => m.id === assistantMessageId
         );

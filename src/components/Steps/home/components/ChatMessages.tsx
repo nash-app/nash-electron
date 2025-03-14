@@ -12,7 +12,6 @@ interface ChatMessagesProps {
   messages: ChatMessage[];
   expandedTools: Record<string, boolean>;
   onToggleToolExpand: (messageId: string) => void;
-  showRawMessages?: boolean;
 }
 
 interface ToolResultProps {
@@ -241,11 +240,20 @@ export function ChatMessages({
   messages,
   expandedTools,
   onToggleToolExpand,
-  showRawMessages = false,
 }: ChatMessagesProps) {
+  // Log all messages for debugging
+  console.log("[ChatMessages] Rendering with messages:", 
+    messages.map(m => ({ 
+      id: m.id, 
+      role: m.role, 
+      content: m.content?.substring(0, 30),
+      isStreaming: m.isStreaming
+    }))
+  );
+
   // Filter out tool result messages that are hidden
   const visibleMessages = messages.filter(
-    (m) => !m.toolResult || showRawMessages
+    (m) => !m.toolResult 
   );
 
   return (
@@ -253,7 +261,15 @@ export function ChatMessages({
       {visibleMessages.map((message) => {
         // Check if this message has an unprocessed tool call
         const unprocessedToolCall = hasUnprocessedToolCall(message);
-
+        
+        // Log each message as it's rendered
+        console.log("[ChatMessages] Rendering message:", { 
+          id: message.id, 
+          role: message.role, 
+          content: message.content?.substring(0, 30),
+          isStreaming: message.isStreaming
+        });
+        
         return (
           <div key={message.id} className="flex flex-col gap-3">
             <Message>
@@ -294,38 +310,10 @@ export function ChatMessages({
                 ) : message.role === "assistant" && message.content ? (
                   <>
                     <MarkdownContent
-                      content={
-                        showRawMessages
-                          ? message.content
-                          : cleanToolCalls(message.content)
-                      }
+                      content={cleanToolCalls(message.content)}
                       className="prose prose-invert max-w-none"
                     />
-                    {/* Show raw message content when debug mode is enabled */}
-                    {showRawMessages && message.role === "assistant" && (
-                      <div className="mt-4 border-t border-zinc-700 pt-2">
-                        <p className="text-xs text-zinc-500 mb-1">
-                          Raw Message:
-                        </p>
-                        <pre className="text-xs bg-zinc-900/50 p-2 rounded-md overflow-x-auto font-mono text-zinc-400 border border-zinc-800 whitespace-pre-wrap">
-                          {message.content}
-                        </pre>
-                        <div className="text-xs text-zinc-500 mt-2 flex flex-col gap-1">
-                          <div>
-                            Contains &lt;tool_call&gt;:{" "}
-                            {message.content.includes("<tool_call>")
-                              ? "✅"
-                              : "❌"}
-                          </div>
-                          <div>
-                            Contains &lt;/tool_call&gt;:{" "}
-                            {message.content.includes("</tool_call>")
-                              ? "✅"
-                              : "❌"}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                   
                   </>
                 ) : (
                   <div className="prose prose-invert max-w-none">
