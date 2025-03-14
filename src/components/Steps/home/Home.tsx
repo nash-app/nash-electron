@@ -603,10 +603,10 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   return (
     <div className="flex h-full flex-col">
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />
-      <div className="flex-1 overflow-hidden">
-        <ChatContainer>
+      <div className="flex-1 overflow-hidden relative flex flex-col">
+        <ChatContainer className="max-w-4xl mx-auto w-full flex-1">
           <div className="flex h-full flex-col">
-            <div className="flex-1 overflow-y-auto p-4">
+            <div className="flex-1 overflow-y-auto w-full p-4 pb-[180px]">
               <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
               <ChatMessages
                 messages={chatState.messages}
@@ -615,93 +615,95 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
                 showRawMessages={showRawMessages}
               />
             </div>
-            <div className="border-t border-zinc-800 p-4">
-              <div className="max-w-4xl mx-auto">
-                <PromptInput
-                  value={input}
-                  onValueChange={setInput}
-                  isLoading={isSending}
-                  onSubmit={() => {
-                    handleSubmit(input);
-                    setInput("");
-                  }}
-                >
-                  <PromptInputTextarea
-                    placeholder={
-                      configuredProviders.size === 0
-                        ? "Please add an API key to start chatting..."
-                        : "Ask me anything..."
-                    }
-                    disabled={isSending || configuredProviders.size === 0}
-                    className="!h-[100px] !rounded-md"
-                  />
-                  <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
-                    <div className="flex items-center gap-2">
-                      <ModelSelector
-                        selectedModel={selectedModel}
-                        onModelChange={setSelectedModel}
-                        configuredProviders={configuredProviders}
-                        onNavigate={onNavigate}
-                      />
-
-                      {/* Debug button to toggle raw messages */}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 rounded-full text-xs"
-                        onClick={toggleRawMessages}
-                      >
-                        {showRawMessages ? "Hide Raw" : "Show Raw"}
-                      </Button>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {chatState.messages && chatState.messages.length > 0 && (
-                        <PromptInputAction tooltip="Summarize conversation">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8 rounded-full"
-                            onClick={handleSummarize}
-                            disabled={
-                              isSending ||
-                              !chatState.messages ||
-                              chatState.messages.length === 0
-                            }
-                          >
-                            <FileText className="h-4 w-4" />
-                          </Button>
-                        </PromptInputAction>
-                      )}
-                      <PromptInputAction
-                        tooltip={isSending ? "Stop generation" : "Send message"}
-                      >
-                        <Button
-                          variant="default"
-                          size="icon"
-                          className="h-8 w-8 rounded-full"
-                          onClick={
-                            isSending ? handleStop : () => handleSubmit(input)
-                          }
-                          disabled={
-                            (!input.trim() && !isSending) ||
-                            configuredProviders.size === 0 ||
-                            !selectedModel
-                          }
-                        >
-                          {isSending ? (
-                            <Square className="h-5 w-5" />
-                          ) : (
-                            <ArrowUp className="h-5 w-5" />
-                          )}
-                        </Button>
-                      </PromptInputAction>
-                    </div>
-                  </PromptInputActions>
-                </PromptInput>
-              </div>
-            </div>
           </div>
         </ChatContainer>
+        {/* Fixed input area at the bottom */}
+        <div className="absolute bottom-0 left-0 right-0 bg-background border-t border-zinc-800 z-10">
+          <div className="max-w-4xl mx-auto p-4">
+            <PromptInput
+              value={input}
+              onValueChange={setInput}
+              isLoading={isSending}
+              onSubmit={() => {
+                handleSubmit(input);
+                setInput("");
+              }}
+              className="mt-2"
+            >
+              <PromptInputTextarea
+                placeholder={
+                  configuredProviders.size === 0
+                    ? "Please add an API key to start chatting..."
+                    : "Ask me anything..."
+                }
+                disabled={isSending || configuredProviders.size === 0}
+                className="!h-[100px] !rounded-md"
+              />
+              <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
+                <div className="flex items-center gap-2">
+                  <ModelSelector
+                    selectedModel={selectedModel}
+                    onModelChange={setSelectedModel}
+                    configuredProviders={configuredProviders}
+                    onNavigate={onNavigate}
+                  />
+
+                  {/* Debug button to toggle raw messages */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 rounded-full text-xs"
+                    onClick={toggleRawMessages}
+                  >
+                    {showRawMessages ? "Hide Raw" : "Show Raw"}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  {chatState.messages && chatState.messages.length > 0 && (
+                    <PromptInputAction tooltip="Summarize conversation">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8 rounded-full"
+                        onClick={handleSummarize}
+                        disabled={
+                          isSending ||
+                          !chatState.messages ||
+                          chatState.messages.length === 0
+                        }
+                      >
+                        <FileText className="h-4 w-4" />
+                      </Button>
+                    </PromptInputAction>
+                  )}
+                  <PromptInputAction
+                    tooltip={isSending ? "Stop generation" : "Send message"}
+                  >
+                    <Button
+                      variant="default"
+                      size="icon"
+                      className="h-8 w-8 rounded-full"
+                      onClick={
+                        isSending ? handleStop : () => handleSubmit(input)
+                      }
+                      disabled={
+                        (!input.trim() && !isSending) ||
+                        configuredProviders.size === 0 ||
+                        !selectedModel
+                      }
+                    >
+                      {isSending ? (
+                        <Square className="h-5 w-5" />
+                      ) : (
+                        <ArrowUp className="h-5 w-5" />
+                      )}
+                    </Button>
+                  </PromptInputAction>
+                </div>
+              </PromptInputActions>
+            </PromptInput>
+          </div>
+        </div>
       </div>
     </div>
   );

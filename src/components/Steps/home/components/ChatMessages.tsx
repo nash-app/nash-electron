@@ -158,7 +158,7 @@ export function ChatMessages({
   );
 
   return (
-    <>
+    <div className="flex flex-col gap-3">
       {visibleMessages.map((message) => {
         // Check if this message has an unprocessed tool call
         const unprocessedToolCall = hasUnprocessedToolCall(message);
@@ -274,6 +274,6 @@ export function ChatMessages({
           </div>
         );
       })}
-    </>
+    </div>
   );
 }
