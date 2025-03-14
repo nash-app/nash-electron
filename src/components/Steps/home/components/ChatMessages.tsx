@@ -29,7 +29,7 @@ interface ToolResultProps {
 // Add the ToolResult component using Tailwind classes
 function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
   return (
-    <div className="flex flex-col gap-2 pl-14 mt-4">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <Badge
           variant="secondary"
@@ -191,7 +191,7 @@ export function ChatMessages({
         const unprocessedToolCall = hasUnprocessedToolCall(message);
 
         return (
-          <div key={message.id} className="flex flex-col gap-2">
+          <div key={message.id} className="flex flex-col gap-3">
             <Message>
               <Avatar className="h-[44px] w-[44px] rounded-lg">
                 {message.role === "assistant" ? (
@@ -288,16 +288,18 @@ export function ChatMessages({
                     {message.content}
                   </div>
                 )}
-
-                {message.processingTool && (
-                  <ToolResult
-                    tool={message.processingTool}
-                    isExpanded={expandedTools[message.id]}
-                    onToggleExpand={() => onToggleToolExpand(message.id)}
-                  />
-                )}
               </div>
             </Message>
+            
+            {message.processingTool && (
+              <div className="flex flex-col gap-2 pl-14">
+                <ToolResult
+                  tool={message.processingTool}
+                  isExpanded={expandedTools[message.id]}
+                  onToggleExpand={() => onToggleToolExpand(message.id)}
+                />
+              </div>
+            )}
           </div>
         );
       })}

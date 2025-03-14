@@ -619,7 +619,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
           </div>
         </ChatContainer>
         {/* Fixed input area at the bottom */}
-        <div className="">
+        <div>
           <div className="max-w-4xl mx-auto p-4">
             <PromptInput
               value={input}
