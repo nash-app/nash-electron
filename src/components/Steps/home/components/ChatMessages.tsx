@@ -29,52 +29,79 @@ interface ToolResultProps {
 // Add the ToolResult component using Tailwind classes
 function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
   return (
-    <div className="mt-4 border-t border-zinc-700 pt-4">
+    <div className="flex flex-col gap-2 pl-14 mt-4">
       <div className="flex items-center gap-2">
         <Badge
-          variant={
-            tool.status === "completed"
-              ? "default"
-              : tool.status === "calling"
-              ? "secondary"
-              : "outline"
-          }
-          className="text-xs"
+          variant="secondary"
+          className={cn(
+            "max-w-max text-sm py-1.5 bg-purple-700 hover:bg-purple-800 text-white",
+            tool.functionCall ? "cursor-pointer" : "cursor-default"
+          )}
+          onClick={() => {
+            if (tool.functionCall) {
+              onToggleExpand();
+            }
+          }}
         >
-          {tool.name}
+          <span className="flex items-center gap-1 font-mono">
+            {tool.status === "preparing" && `Preparing ${tool.name}...`}
+            {tool.status === "calling" && `Calling ${tool.name}...`}
+            {tool.status === "completed" && `Used ${tool.name}`}
+            {tool.status === "completed" && tool.functionCall && (
+              isExpanded ? (
+                <ChevronDown className="h-4 w-4" />
+              ) : (
+                <ChevronRight className="h-4 w-4" />
+              )
+            )}
+          </span>
         </Badge>
-        <span className="text-xs text-zinc-400">
-          {tool.status === "preparing"
-            ? "Preparing..."
-            : tool.status === "calling"
-            ? "Calling..."
-            : "Completed"}
-        </span>
-        <button
-          onClick={onToggleExpand}
-          className="ml-auto text-zinc-400 hover:text-zinc-300"
-        >
-          {isExpanded ? (
-            <ChevronDown className="h-4 w-4" />
-          ) : (
-            <ChevronRight className="h-4 w-4" />
-          )}
-        </button>
       </div>
-      {isExpanded && (
-        <div className="mt-2 space-y-2">
-          {tool.functionCall && (
-            <div>
-              <p className="text-xs text-zinc-400 mb-1">Function Call:</p>
-              <pre className="text-xs bg-zinc-900/50 p-2 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
-                {tool.functionCall}
-              </pre>
+
+      {isExpanded && tool.functionCall && (
+        <div className="flex flex-col gap-3 bg-zinc-800/50 border border-zinc-700/50 p-4 rounded-lg overflow-x-auto">
+          <div className="flex flex-col gap-2">
+            <div className="text-sm text-purple-300 font-medium flex items-center gap-2">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5"
+                />
+              </svg>
+              Function Call
             </div>
-          )}
+            <pre className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
+              {tool.functionCall}
+            </pre>
+          </div>
           {tool.response && (
-            <div>
-              <p className="text-xs text-zinc-400 mb-1">Response:</p>
-              <pre className="text-xs bg-zinc-900/50 p-2 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
+            <div className="flex flex-col gap-2">
+              <div className="text-sm text-emerald-300 font-medium flex items-center gap-2">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                Response
+              </div>
+              <pre className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
                 {tool.response}
               </pre>
             </div>

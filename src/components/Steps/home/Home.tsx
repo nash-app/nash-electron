@@ -606,8 +606,9 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       <div className="flex-1 overflow-hidden relative flex flex-col">
         <ChatContainer className="max-w-4xl mx-auto w-full flex-1">
           <div className="flex h-full flex-col">
-            <div className="flex-1 overflow-y-auto w-full p-4 pb-[180px]">
+            <div className="flex-1 overflow-y-auto w-full p-4">
               <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
+
               <ChatMessages
                 messages={chatState.messages}
                 expandedTools={chatState.expandedTools}
@@ -618,7 +619,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
           </div>
         </ChatContainer>
         {/* Fixed input area at the bottom */}
-        <div className="absolute bottom-0 left-0 right-0 bg-background border-t border-zinc-800 z-10">
+        <div className="">
           <div className="max-w-4xl mx-auto p-4">
             <PromptInput
               value={input}
