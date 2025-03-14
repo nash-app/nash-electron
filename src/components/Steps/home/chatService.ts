@@ -57,35 +57,99 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
     throw new Error("Messages must be an array");
   }
 
-  // Filter messages to only include completed messages, not streaming ones
+  console.log("Preparing messages for request:", JSON.stringify(messages.map(m => ({
+    role: m.role,
+    isHidden: m.isHidden,
+    isStreaming: m.isStreaming,
+    content: m.content?.substring(0, 30) + "..."
+  }))));
+
+  // Filter messages to only include relevant messages
   // and format them exactly as expected by the server
-  const completedMessages = messages.filter((m) => {
+  const filteredMessages = messages.filter((m) => {
+    // Skip hidden messages
+    if (m.isHidden) {
+      return false;
+    }
+    
     // For assistant messages, only include those that are complete (not streaming)
     if (m.role === "assistant") {
       return !m.isStreaming;
     }
+    
+    // Include all user messages
     return m.role === "user";
   });
 
-  // Check if we have any messages at all
-  if (completedMessages.length === 0) {
+  console.log("Filtered messages:", filteredMessages.length);
+
+  // If we don't have any user messages, we need to ensure there's at least one
+  if (!filteredMessages.some(m => m.role === "user")) {
+    console.log("No user messages found, adding a synthetic one");
+    
+    // Find the first non-hidden message as reference
+    const firstMessage = messages.find(m => !m.isHidden);
+    
+    // If we have a tool result in the messages, convert it to a user query
+    const toolResultMsg = messages.find(m => m.toolResult && !m.isHidden);
+    
+    if (toolResultMsg && toolResultMsg.toolResult) {
+      // Create a synthetic user message based on the tool result
+      filteredMessages.unshift({
+        id: uuidv4(),
+        role: "user",
+        content: `Please analyze the results from the tool ${toolResultMsg.toolResult.toolName}`,
+        timestamp: new Date()
+      });
+    } else if (firstMessage) {
+      // Fallback to a generic user message
+      filteredMessages.unshift({
+        id: uuidv4(),
+        role: "user",
+        content: "Please continue with your explanation based on the previous messages.",
+        timestamp: new Date()
+      });
+    } else {
+      throw new Error("No suitable messages found to create a conversation");
+    }
+  }
+
+  // Check if we have any messages at all after filtering
+  if (filteredMessages.length === 0) {
     throw new Error(
-      "No messages found for the conversation. At least one user message is required."
+      "No messages left after filtering. At least one user message is required."
     );
   }
 
   // Check if the first message is from a user (required by Anthropic)
-  if (completedMessages[0].role !== "user") {
-    throw new Error(
-      "The first message must be from a user. This is required by Anthropic's API."
-    );
+  if (filteredMessages[0].role !== "user") {
+    console.log("First message is not from user, rearranging messages");
+    
+    // Find the first user message
+    const firstUserMessageIndex = filteredMessages.findIndex(m => m.role === "user");
+    
+    if (firstUserMessageIndex >= 0) {
+      // Move the first user message to the beginning
+      const userMessage = filteredMessages.splice(firstUserMessageIndex, 1)[0];
+      filteredMessages.unshift(userMessage);
+    } else {
+      // If we somehow got here without a user message, add a synthetic one
+      filteredMessages.unshift({
+        id: uuidv4(),
+        role: "user",
+        content: "Please continue with your analysis and explanation.",
+        timestamp: new Date()
+      });
+    }
   }
 
   // Map messages to the exact format expected by the server
-  const messagesForRequest = completedMessages.map((m) => ({
+  const messagesForRequest = filteredMessages.map((m) => ({
     role: m.role,
     content: m.content,
   }));
+
+  console.log("Final message count for request:", messagesForRequest.length);
 
   // Default model name
   const modelName = "claude-3-sonnet-20240229";
@@ -93,140 +157,140 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
   return { messagesForRequest, modelName };
 }
 
-// Separate function to extract tool call content even when closing tag is missing
+// Extract tool call content between the tool call markers and clean up streaming data format
 const extractToolCallContent = (content: string): string | null => {
   if (!content.includes(TOOL_CALL_START_MARKER)) {
     return null;
   }
 
-  // First try to find content between start and end markers
-  const toolCallRegex = new RegExp(
-    `${TOOL_CALL_START_MARKER}([\\s\\S]*?)${TOOL_CALL_END_MARKER}`
-  );
-  const match = content.match(toolCallRegex);
-
-  if (match && match[1]) {
-    return match[1].trim();
+  // Extract the tool call JSON - similar to Python implementation
+  const startTag = TOOL_CALL_START_MARKER;
+  const endTag = TOOL_CALL_END_MARKER;
+  const startIdx = content.indexOf(startTag) + startTag.length;
+  const endIdx = content.indexOf(endTag);
+  
+  // If no end marker found, take everything after the start marker
+  let extractedContent;
+  if (startIdx <= 0 || endIdx <= 0) {
+    extractedContent = content.substring(startIdx).trim();
+  } else {
+    // Return the content between markers
+    extractedContent = content.substring(startIdx, endIdx).trim();
   }
-
-  // If no end marker is found, extract everything after the start marker
-  const startIndex = content.indexOf(TOOL_CALL_START_MARKER);
-  if (startIndex >= 0) {
-    // Extract everything after the start marker
-    const extractedContent = content
-      .substring(startIndex + TOOL_CALL_START_MARKER.length)
-      .trim();
-
-    // Clean up the SSE data format
-    const cleanedContent = extractedContent
-      .split("\n")
-      .filter(line => line.trim())
-      .map(line => {
-        // Extract content from data: {"content": "..."} format
-        const contentMatch = line.match(/data: {"content": "(.*)"}/);
-        if (contentMatch && contentMatch[1]) {
-          return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
-        }
-        return line;
-      })
-      .join("");
-
+  
+  // Clean up streaming data format - this handles the SSE data format
+  if (extractedContent.includes('data: {"content":')) {
+    console.log("Cleaning up streaming data format");
+    let cleanedContent = "";
+    
+    // Process line by line
+    const lines = extractedContent.split('\n');
+    for (const line of lines) {
+      // Look for data: {"content": "..."} pattern
+      const match = line.match(/data:\s*{"content":\s*"(.*)"\}/);
+      if (match && match[1]) {
+        // Extract just the content and unescape it
+        let extracted = match[1]
+          .replace(/\\n/g, '\n')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+        cleanedContent += extracted;
+      } else if (!line.includes('data: [DONE]')) {
+        // Include non-data lines (but skip [DONE] markers)
+        cleanedContent += line;
+      }
+    }
+    
+    // Special case - if the content starts with "}" or other JSON fragments, 
+    // try to clean it up further by removing the first line
+    if (cleanedContent.startsWith('}') || cleanedContent.startsWith('"')) {
+      // Look for the start of a valid JSON object
+      const jsonStart = cleanedContent.indexOf('{');
+      if (jsonStart > 0) {
+        cleanedContent = cleanedContent.substring(jsonStart);
+        console.log("Removed invalid JSON prefix");
+      }
+    }
+    
+    // Further clean up any remaining issues that might prevent JSON parsing
+    cleanedContent = cleanedContent.replace(/^\s*"/, ''); // Remove leading quotes
+    
     return cleanedContent;
   }
-
-  return null;
+  
+  return extractedContent;
 };
 
-// More aggressive approach to find JSON - look for direct JSON after the tool call marker
-const findJsonInToolCall = (content: string) => {
-  // First, clean up the content by removing SSE data format
-  const cleanedContent = content
-    .split("\n")
-    .filter(line => line.trim())
-    .map(line => {
-      // Extract content from data: {"content": "..."} format
-      const contentMatch = line.match(/data: {"content": "(.*)"}/);
-      if (contentMatch && contentMatch[1]) {
-        return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+// Parse the tool call JSON - simplified to match Python reference implementation
+const parseToolCall = (content: string) => {
+  try {
+    // First try to directly parse the content as JSON
+    const jsonObj = JSON.parse(content);
+    
+    // Check if we have a function object with name
+    if (jsonObj && jsonObj.function && jsonObj.function.name) {
+      return {
+        toolCallFound: true,
+        toolName: jsonObj.function.name,
+        arguments: jsonObj.function.arguments || {},
+      };
+    }
+    
+    // If we have a list, take the first item
+    if (Array.isArray(jsonObj) && jsonObj.length > 0) {
+      const call = jsonObj[0];
+      if (call && call.function && call.function.name) {
+        return {
+          toolCallFound: true,
+          toolName: call.function.name,
+          arguments: call.function.arguments || {},
+        };
       }
-      return line;
-    })
-    .join("");
-
-  // Try to reconstruct a complete JSON object
-  if (cleanedContent.includes('"function"')) {
+    }
+    
+    return {
+      toolCallFound: false,
+      toolName: null,
+      arguments: null,
+      error: "No valid function call found in JSON"
+    };
+  } catch (e) {
+    // If JSON parse fails, try a more lenient approach with regex
     try {
-      // This is likely a function call object
-      let reconstructedJson = '{"function": {';
-      
-      // Extract the name
-      const nameMatch = cleanedContent.match(/"name":\s*"([^"]+)"/);
-      if (nameMatch) {
-        reconstructedJson += `"name": "${nameMatch[1]}"`;
-      }
-      
-      // Extract arguments if present
-      const argsMatch = cleanedContent.match(/"arguments":\s*(\{[^}]*\})/);
-      if (argsMatch) {
-        reconstructedJson += `, "arguments": ${argsMatch[1]}`;
-      } else {
-        reconstructedJson += ', "arguments": {}';
-      }
-      
-      reconstructedJson += '}}';
-      return reconstructedJson;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // If the above approach fails, fall back to the original method
-  // Find the first { character which might start JSON
-  const jsonStartIndex = cleanedContent.indexOf("{");
-  if (jsonStartIndex < 0) {
-    return null;
-  }
-
-  // Try to extract a complete JSON object
-  let bracketCount = 0;
-  let extracted = "";
-  let inString = false;
-  let escapeNext = false;
-
-  for (let i = jsonStartIndex; i < cleanedContent.length; i++) {
-    const char = cleanedContent[i];
-    extracted += char;
-
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (char === "\\") {
-      escapeNext = true;
-      continue;
-    }
-
-    if (char === '"' && !escapeNext) {
-      inString = !inString;
-      continue;
-    }
-
-    if (!inString) {
-      if (char === "{") bracketCount++;
-      if (char === "}") {
-        bracketCount--;
-        if (bracketCount === 0) {
-          break; // We found a complete JSON object
+      // Try to extract the name with regex
+      const nameMatch = content.match(/"name"\s*:\s*"([^"]+)"/);
+      if (nameMatch && nameMatch[1]) {
+        // Try to extract arguments
+        let args = {};
+        const argsMatch = content.match(/"arguments"\s*:\s*(\{[^}]*\})/);
+        if (argsMatch && argsMatch[1]) {
+          try {
+            args = JSON.parse(argsMatch[1]);
+          } catch (e) {
+            // If arguments can't be parsed, use empty object
+          }
         }
+        
+        return {
+          toolCallFound: true,
+          toolName: nameMatch[1],
+          arguments: args,
+        };
       }
+    } catch (regexError) {
+      // If regex approach fails too, return error
     }
+    
+    return {
+      toolCallFound: false,
+      toolName: null,
+      arguments: null,
+      error: `Error parsing tool call JSON: ${e}`
+    };
   }
-
-  return extracted;
 };
 
-// Helper function to handle tool calls
+// Helper function to handle tool calls - simplified to match Python reference implementation
 const handleToolCall = async (
   toolCallContent: string,
   pendingContent: string,
@@ -241,157 +305,86 @@ const handleToolCall = async (
     return { success: false, sessionId };
   }
 
-  // ADDED: Generate a unique ID for this tool call to help with tracking
-  const toolCallId = uuidv4().substring(0, 8);
+  // Make sure we have the closing tag - following Python reference
+  let messageWithClosingTag = toolCallContent;
+  if (!toolCallContent.includes(TOOL_CALL_END_MARKER)) {
+    messageWithClosingTag = toolCallContent + TOOL_CALL_END_MARKER;
+  }
 
-  // Extract the content with our helper function that handles missing end markers
-  const extractedContent = extractToolCallContent(toolCallContent);
-
+  // Extract the content between the markers
+  const extractedContent = extractToolCallContent(messageWithClosingTag);
   if (!extractedContent) {
     return { success: false, sessionId };
   }
 
-  // Extract JSON content using our custom function
-  const extractedJson = findJsonInToolCall(extractedContent);
+  // Parse the tool call using our new parser
+  const parsedToolCall = parseToolCall(extractedContent);
+  
+  // If we couldn't parse the tool call, return failure
+  if (!parsedToolCall.toolCallFound || !parsedToolCall.toolName) {
+    return { success: false, sessionId };
+  }
+
+  // Get the tool name and arguments
+  const toolName = parsedToolCall.toolName;
+  const toolArgs = parsedToolCall.arguments || {};
 
   // First, update the UI to show we're processing a tool call
   if (handlers.setMessages) {
-    try {
-      // Default tool name
-      let toolName = "Unknown Tool";
-      let functionCall = extractedContent;
-      
-      // Try to parse the JSON to get the tool name
-      if (extractedJson) {
-        try {
-          const jsonObj = JSON.parse(extractedJson);
-          
-          if (jsonObj.function && jsonObj.function.name) {
-            toolName = jsonObj.function.name;
-            functionCall = JSON.stringify(jsonObj, null, 2);
-          }
-        } catch (e) {
-        }
+    // Update the UI to show we're processing this tool
+    handlers.setMessages((prevMessages) => {
+      const newMessages = [...prevMessages];
+      // Find the last assistant message to update
+      const lastAssistantIndex = newMessages.findIndex(
+        (m) => m.role === "assistant" && m.isStreaming !== false
+      );
+
+      if (lastAssistantIndex >= 0) {
+        // Add processing tool info to show the badge
+        newMessages[lastAssistantIndex].processingTool = {
+          name: toolName, // Use actual tool name without ID suffix
+          status: "calling",
+          functionCall: messageWithClosingTag, // Store the raw tool call content
+        };
       } else {
+        // FALLBACK: If we can't find the assistant message, add a new one
+        newMessages.push({
+          id: uuidv4(),
+          role: "assistant",
+          content: "Processing tool call...",
+          timestamp: new Date(),
+          processingTool: {
+            name: toolName,
+            status: "calling",
+            functionCall: messageWithClosingTag
+          }
+        });
       }
+      return newMessages;
+    });
+    
+    // Now process the tool call
+    try {
+      // Call the tool with parsed arguments
+      if (handlers.onToolCall) {
+        const result = await handlers.onToolCall(toolName, toolArgs);
 
-      // If we couldn't get the tool name from JSON, try regex
-      if (toolName === "Unknown Tool") {
-        const nameMatch =
-          extractedContent.match(/["']?name["']?\s*:\s*["']([^"']+)["']/i) ||
-          extractedContent.match(/nash_(\w+)/i);
-        if (nameMatch) {
-          toolName = nameMatch[1];
-        }
-      }
-
-      // FIXED: Add the tool call ID to the tool name to ensure uniqueness
-      const uniqueToolName = `${toolName}_${toolCallId}`;
-      
-      // Add more logging
-      // Update the UI to show we're processing this tool
-      handlers.setMessages((prevMessages) => {
-        const newMessages = [...prevMessages];
-        // Find the last assistant message to update
-        const lastAssistantIndex = newMessages.findIndex(
-          (m) => m.role === "assistant" && m.isStreaming !== false
+        // Update the UI with the result
+        await updateUIWithToolResult(
+          handlers,
+          toolName, // Use regular tool name - no suffix
+          result,
+          messages,
+          modelId,
+          abortSignal,
+          sessionId
         );
 
-        if (lastAssistantIndex >= 0) {
-          // Log before updating
-          // Add processing tool info to show the badge
-          newMessages[lastAssistantIndex].processingTool = {
-            name: uniqueToolName, // Use unique name
-            status: "calling",
-            functionCall: toolCallContent, // Store the raw tool call content
-          };
-        } else {
-          // FALLBACK: If we can't find the assistant message, add a new one
-          newMessages.push({
-            id: uuidv4(),
-            role: "assistant",
-            content: "Processing tool call...",
-            timestamp: new Date(),
-            processingTool: {
-              name: uniqueToolName,
-              status: "calling",
-              functionCall: toolCallContent
-            }
-          });
-        }
-        return newMessages;
-      });
-      
-      // Now try to process the tool call
-      try {
-        // First try with the extracted JSON
-        if (extractedJson) {
-          try {
-            const jsonObj = JSON.parse(extractedJson);
-
-            // Handle the server format we're seeing in logs
-            if (jsonObj.function && jsonObj.function.name) {
-              const toolName = jsonObj.function.name;
-              const toolArgs = jsonObj.function.arguments || {};
-
-              // Handle any tool dynamically
-              if (handlers.onToolCall) {
-                const result = await handlers.onToolCall(toolName, toolArgs);
-
-                // Update the UI with the result
-                await updateUIWithToolResult(
-                  handlers,
-                  uniqueToolName, // Use unique name
-                  result,
-                  messages,
-                  modelId,
-                  abortSignal,
-                  sessionId
-                );
-
-                return { success: true, sessionId };
-              }
-            }
-          } catch (e) {
-          }
-        }
-
-        // Fallback to regex-based extraction if JSON parsing failed
-        const nameMatch =
-          extractedContent.match(/["']?name["']?\s*:\s*["']([^"']+)["']/i) ||
-          extractedContent.match(/nash_(\w+)/i);
-
-        if (nameMatch) {
-          const toolName = nameMatch[1];
-
-          // Call the tool with empty args as fallback
-          if (handlers.onToolCall) {
-            try {
-              const result = await handlers.onToolCall(toolName, {});
-
-              // Update the UI with the result
-              await updateUIWithToolResult(
-                handlers,
-                uniqueToolName, // Use unique name
-                result,
-                messages,
-                modelId,
-                abortSignal,
-                sessionId
-              );
-
-              return { success: true, sessionId };
-            } catch (e) {
-            }
-          }
-        }
-
-        // If we get here, we couldn't process the tool call
-        return { success: false, sessionId };
-      } catch (error) {
-        return { success: false, sessionId };
+        return { success: true, sessionId };
       }
-    } catch (parseError) {
+    } catch (error) {
+      console.error("Error calling tool:", error);
+      return { success: false, sessionId };
     }
   }
 
@@ -399,7 +392,7 @@ const handleToolCall = async (
   return { success: false, sessionId };
 };
 
-// Helper function to update the UI with tool results
+// Helper function to update the UI with tool results - simplified based on Python reference
 const updateUIWithToolResult = async (
   handlers: StreamHandlers,
   toolName: string,
@@ -410,10 +403,8 @@ const updateUIWithToolResult = async (
   sessionId: string | null = null
 ) => {
   if (!handlers.setMessages) return;
-
-  // Extract toolCallId from the unique toolName if present
-  const toolCallId = toolName.includes('_') ? toolName.split('_').pop() : 'unknown';
   
+  // Format the result 
   const formattedResult =
     typeof result === "object"
       ? JSON.stringify(result, null, 2)
@@ -423,15 +414,14 @@ const updateUIWithToolResult = async (
   handlers.setMessages((prevMessages) => {
     const newMessages = [...prevMessages];
     
-    // FIXED: More specific selector that requires BOTH matching tool name AND calling status
-    // This prevents updating the wrong badge when multiple tools are called
+    // Find the message with this specific tool call in "calling" status
     const processingIndex = newMessages.findIndex(
       (m) =>
         m.processingTool?.name === toolName &&
         m.processingTool?.status === "calling"
     );
 
-    // If we can't find an exact match, fall back to finding any calling tool as a last resort
+    // If we can't find an exact match, look for any tool in "calling" status
     const fallbackIndex = processingIndex >= 0 ? processingIndex : 
       newMessages.findIndex(m => m.processingTool?.status === "calling");
 
@@ -450,7 +440,7 @@ const updateUIWithToolResult = async (
   let updatedMessages: ChatMessage[] = [];
   
   handlers.setMessages((prevMessages) => {
-    // Find the last assistant message (which likely contained the tool call)
+    // Find the assistant message that contained the tool call
     const lastAssistantIndex = prevMessages.findIndex(
       (m) => m.role === "assistant" && !m.toolResult
     );
@@ -461,7 +451,7 @@ const updateUIWithToolResult = async (
       content: `Tool result: ${formattedResult}`,
       timestamp: new Date(),
       toolResult: {
-        toolName,
+        toolName, // Use the clean tool name
         result: formattedResult,
       },
     };
@@ -493,28 +483,49 @@ const updateUIWithToolResult = async (
     return updatedMessages;
   });
 
-  // Now send the tool result back to the LLM to get a response
-  try {
-    // Create a new message to send to the LLM
-    const toolResultForLLM: ChatMessage = {
-      id: uuidv4(),
-      role: "user",
-      content: `Tool '${toolName}' returned the following result:\n\n\`\`\`\n${formattedResult}\n\`\`\`\n\nPlease analyze this result and provide your insights.`,
-      timestamp: new Date(),
-      isHidden: true, // This message won't be shown in the UI
-    };
+  // Match Python reference implementation - use tool result and add a synthetic user message if needed
+  // No try-catch block here - let errors propagate
+  // The tool result is already added as an assistant message
+  console.log("Tool result added as assistant message - matching Python reference implementation");
+  
+  // Get the updated messages
+  const allMessages = [...updatedMessages];
+  console.log("Updated messages count:", allMessages.length);
+  
+  // ALWAYS add a user message for tool result follow-up - this is critical
+  console.log("Adding synthetic user message for tool result follow-up - FORCED");
+  
+  // Add a synthetic user message asking for analysis of the tool result
+  const syntheticUserMessage: ChatMessage = {
+    id: uuidv4(),
+    role: "user",
+    content: `Please analyze the results from the ${toolName} tool.`,
+    timestamp: new Date(),
+  };
+  
+  // Add to our messages array and to the UI
+  allMessages.push(syntheticUserMessage);
+  
+  // Force UI update with new message
+  handlers.setMessages((prevMessages) => {
+    console.log("Adding synthetic message to UI");
+    return [...prevMessages, syntheticUserMessage];
+  });
 
-    // Add this message to the conversation
-    handlers.setMessages((prevMessages) => {
-      return [...prevMessages, toolResultForLLM];
-    });
-
-    // Get the updated messages
-    const allMessages = [...updatedMessages, toolResultForLLM];
-
-    // Call streamCompletion with the updated messages
-    setTimeout(async () => {
+  // Call streamCompletion with the updated messages - do this immediately
+  console.log("IMMEDIATELY starting new completion after tool call");
+  
+  // Debug log the message sequence
+  allMessages.forEach((m, i) => {
+    console.log(`Message ${i}: role=${m.role}, content=${m.content?.substring(0, 30)}...`);
+  });
+  
+  // Create a function to retry multiple times if needed
+  const executeStreamWithRetry = async (retryCount = 3) => {
+    for (let attempt = 1; attempt <= retryCount; attempt++) {
       try {
+        console.log(`Attempt ${attempt} to start follow-up completion`);
+        
         await streamCompletion(
           allMessages,
           handlers,
@@ -522,11 +533,38 @@ const updateUIWithToolResult = async (
           abortSignal,
           sessionId
         );
+        
+        console.log("Follow-up completion succeeded!");
+        return; // Success, exit the retry loop
       } catch (error) {
+        console.error(`Error in follow-up stream completion attempt ${attempt}:`, error);
+        
+        if (attempt < retryCount) {
+          // Wait longer between retries
+          const delay = attempt * 500;
+          console.log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          console.error("All follow-up completion attempts failed");
+          
+          // If all attempts fail, show an error message to the user
+          handlers.setMessages((prevMessages) => {
+            const newMessages = [...prevMessages];
+            newMessages.push({
+              id: uuidv4(),
+              role: "assistant",
+              content: "I wasn't able to analyze the tool results due to a technical issue. Please try again.",
+              timestamp: new Date(),
+            });
+            return newMessages;
+          });
+        }
       }
-    }, 500); // Small delay to ensure UI updates first
-  } catch (error) {
-  }
+    }
+  };
+  
+  // Execute with retries
+  executeStreamWithRetry();
 };
 
 // Helper function to process a single line of streamed data
@@ -851,24 +889,32 @@ export const streamCompletion = async (
 
                 // Check if we have a tool call marker and handler
                 if (handlers.onToolCall && handlers.setMessages) {
-                    // Try to extract tool name from the initial content
-                    let initialToolName = "Preparing...";
+                    // Try to extract tool name from the initial content - simplified approach
+                    // Start with a default name
+                    let toolName = "Preparing...";
+                    
+                    // Parse any available content to get a better tool name
                     try {
-                        // First try to find a complete JSON object
-                        const jsonMatch = afterStartMarker.match(/\{[\s\S]*\}/);
-                        if (jsonMatch) {
-                            const jsonObj = JSON.parse(jsonMatch[0]);
-                            if (jsonObj.function?.name) {
-                                initialToolName = jsonObj.function.name;
-                            }
-                        } else {
-                            // Try regex patterns
-                            const nameMatch = afterStartMarker.match(/["']?name["']?\s*:\s*["']([^"']+)["']/i);
-                            if (nameMatch) {
-                                initialToolName = nameMatch[1];
+                        // Try to parse tool call - this is a simpler approach than before
+                        const content = afterStartMarker.trim();
+                        
+                        // First check if we have a JSON object we can parse
+                        if (content.startsWith("{")) {
+                            try {
+                                const parsed = JSON.parse(content);
+                                if (parsed.function?.name) {
+                                    toolName = parsed.function.name;
+                                }
+                            } catch (e) {
+                                // JSON parsing failed, try regex as fallback
+                                const nameMatch = content.match(/"name"\s*:\s*"([^"]+)"/);
+                                if (nameMatch && nameMatch[1]) {
+                                    toolName = nameMatch[1];
+                                }
                             }
                         }
                     } catch (e) {
+                        // Keep the default name
                     }
 
                     // Set the processing state
@@ -879,7 +925,7 @@ export const streamCompletion = async (
                         );
                         if (lastAssistantIndex >= 0) {
                             newMessages[lastAssistantIndex].processingTool = {
-                                name: initialToolName,
+                                name: toolName, // Use the clean tool name without ID
                                 status: "preparing",
                                 response: "",
                             };
@@ -944,100 +990,314 @@ export const streamCompletion = async (
       !inToolCall &&
       handlers.onToolCall
     ) {
-      // Extract the tool call content
-      const startIndex = fullResponse.indexOf(TOOL_CALL_START_MARKER);
-      let endIndex = fullResponse.indexOf(TOOL_CALL_END_MARKER, startIndex);
-
-      // If no end marker, take everything after the start marker
-      let extractedToolCall;
-      if (endIndex === -1) {
-        extractedToolCall =
-          fullResponse.substring(startIndex) + TOOL_CALL_END_MARKER;
-      } else {
-        // Include the end marker in the extracted content
-        endIndex += TOOL_CALL_END_MARKER.length;
-        extractedToolCall = fullResponse.substring(startIndex, endIndex);
-      }
-
-      // Update the UI to show we're processing a tool
-      if (handlers.setMessages) {
-        handlers.setMessages((prevMessages) => {
-          const newMessages = [...prevMessages];
-          const lastAssistantIndex = newMessages.findIndex(
-            (m) => m.id === assistantMessageId
-          );
-          if (lastAssistantIndex >= 0) {
-            // Try to extract the tool name from the tool call
-            let toolName = "Unknown Tool";
-            try {
-              const cleanedContent = extractedToolCall
-                .replace(TOOL_CALL_START_MARKER, "")
-                .replace(TOOL_CALL_END_MARKER, "")
-                .trim();
+      console.log("Tool call found in full response but not processed during streaming");
+      console.log("Full response length:", fullResponse.length);
+      
+      try {
+        // Make sure we have the closing tag - following Python reference
+        let messageWithClosingTag = fullResponse;
+        if (!fullResponse.includes(TOOL_CALL_END_MARKER)) {
+          messageWithClosingTag = fullResponse + TOOL_CALL_END_MARKER;
+          console.log("Added closing tag to tool call");
+        }
+        
+        // Extract the tool call content similar to the Python implementation
+        const startTag = TOOL_CALL_START_MARKER;
+        const endTag = TOOL_CALL_END_MARKER;
+        const startIdx = messageWithClosingTag.indexOf(startTag);
+        const endIdx = messageWithClosingTag.indexOf(endTag, startIdx);
+        
+        console.log(`Tool call bounds: start=${startIdx}, end=${endIdx}`);
+        
+        if (startIdx >= 0 && endIdx > startIdx) {
+          // Extract the tool call including the markers
+          const extractedToolCall = messageWithClosingTag.substring(startIdx, endIdx + endTag.length);
+          console.log("Extracted tool call length:", extractedToolCall.length);
+          
+          // ALTERNATIVE APPROACH: Directly add tool to UI without processing
+          // This ensures a tool badge shows up even if the handler fails
+          if (handlers.setMessages) {
+            // Use a direct update method focused on finding the right message
+            handlers.setMessages((prevMessages) => {
+              const newMessages = [...prevMessages];
               
-              // Try to extract the tool name using regex
-              const nameMatch = cleanedContent.match(/"name"\s*:\s*"([^"]+)"/);
-              if (nameMatch && nameMatch[1]) {
-                toolName = nameMatch[1];
-              } else {
-                // Try to parse as JSON if regex fails
-                const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                  try {
-                    const jsonObj = JSON.parse(jsonMatch[0]);
-                    if (jsonObj.function && jsonObj.function.name) {
-                      toolName = jsonObj.function.name;
+              // Find the most recent messages from assistant
+              const assistantMessages = newMessages
+                .filter(m => m.role === "assistant")
+                .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+              
+              if (assistantMessages.length > 0) {
+                // Get the most recent assistant message
+                const messageToUpdate = assistantMessages[0];
+                console.log("Found message to update with ID:", messageToUpdate.id);
+                
+                // Try to get a good tool name from the extracted tool call
+                let toolName = "tool";
+                try {
+                  // First, log the exact tool call for debugging
+                  const rawContent = extractedToolCall.replace(startTag, "").replace(endTag, "").trim();
+                  console.log("Raw tool call content:", rawContent);
+                  
+                  // Extract the content between the markers
+                  const content = extractToolCallContent(extractedToolCall);
+                  console.log("Extracted content:", content);
+                  
+                  if (content) {
+                    // Log the content we're trying to parse
+                    console.log("Content to parse:", content);
+                    
+                    // Try multiple approaches to extract the name
+                    
+                    // 1. Try to parse as JSON first
+                    try {
+                      // Try to fix common JSON issues first
+                      let fixedContent = content;
+                      
+                      // If content starts with unexpected characters, try to find valid JSON
+                      if (fixedContent.startsWith('}') || fixedContent.startsWith('"')) {
+                        const jsonStart = fixedContent.indexOf('{');
+                        if (jsonStart >= 0) {
+                          fixedContent = fixedContent.substring(jsonStart);
+                          console.log("Fixed content by finding proper JSON start");
+                        }
+                      }
+                      
+                      // Try parsing the cleaned content
+                      const jsonObj = JSON.parse(fixedContent);
+                      console.log("Parsed JSON:", jsonObj);
+                      
+                      if (jsonObj.function && jsonObj.function.name) {
+                        toolName = jsonObj.function.name;
+                        console.log("Found tool name from JSON:", toolName);
+                      }
+                    } catch (jsonError) {
+                      console.log("JSON parse failed:", jsonError.message);
+                      
+                      // 2. Try regex for function.name format
+                      const functionNameMatch = content.match(/"function"[^}]*"name"\s*:\s*"([^"]+)"/);
+                      if (functionNameMatch && functionNameMatch[1]) {
+                        toolName = functionNameMatch[1];
+                        console.log("Found tool name from function regex:", toolName);
+                      } else {
+                        // 3. Try simple name regex
+                        const nameMatch = content.match(/"name"\s*:\s*"([^"]+)"/);
+                        if (nameMatch && nameMatch[1]) {
+                          toolName = nameMatch[1];
+                          console.log("Found tool name from simple regex:", toolName);
+                        } else {
+                          // 4. Last resort - try to find any quoted word that might be a name
+                          const wordMatch = content.match(/"([^"]+)"/);
+                          if (wordMatch && wordMatch[1] && wordMatch[1].length > 1) {
+                            // Only use if it looks like a reasonable name
+                            toolName = wordMatch[1];
+                            console.log("Found potential tool name from quotes:", toolName);
+                          }
+                        }
+                      }
                     }
-                  } catch (jsonError) {
+                  }
+                } catch (e) {
+                  console.error("Error extracting tool name:", e);
+                }
+                
+                // Final sanitization - ensure the tool name doesn't contain invalid characters
+                if (toolName.includes('data:') || toolName.includes('}') || toolName.includes('{')) {
+                  // Try one more generic approach - look for name field in the function
+                  const nameMatch = extractedToolCall.match(/["']name["']\s*:\s*["']([^"']+)["']/);
+                  if (nameMatch && nameMatch[1]) {
+                    toolName = nameMatch[1];
+                    console.log("Found tool name from final regex:", toolName);
+                  } else {
+                    toolName = "tool";
+                    console.log("Sanitized invalid tool name");
                   }
                 }
+                
+                console.log("Using final tool name:", toolName);
+                
+                // Add the tool to the message
+                messageToUpdate.processingTool = {
+                  name: toolName, 
+                  status: "calling",
+                  functionCall: extractedToolCall
+                };
               }
-            } catch (e) {
-            }
-
-            newMessages[lastAssistantIndex].processingTool = {
-              name: toolName,
-              status: "calling",
-              functionCall: extractedToolCall, // Store the raw tool call content
-            };
+              
+              return newMessages;
+            });
           }
-          return newMessages;
-        });
+          
+          // Wait longer to ensure UI is updated
+          await new Promise(resolve => setTimeout(resolve, 300));
+          
+          // Process the tool call using our handler function
+          await handleToolCall(
+            extractedToolCall,
+            currentContent,
+            handlers,
+            messages,
+            modelId || modelName || "",
+            abortSignal,
+            sessionId
+          );
+        } else {
+          console.error("Could not find proper tool call boundaries in full response");
+          console.log("Start marker position:", startIdx);
+          console.log("End marker position:", endIdx);
+        }
+      } catch (error) {
+        console.error("Error processing tool call from full response:", error);
       }
-
-      // Process the tool call
-      await handleToolCall(
-        extractedToolCall,
-        currentContent,
-        handlers,
-        messages,
-        modelId || modelName || "",
-        abortSignal,
-        sessionId
-      );
     }
 
     // Check if we have an unfinished tool call
+    // This matches the Python reference implementation for handling incomplete tool calls
     if (inToolCall && toolCallContent) {
-      // Add closing tag if missing
-      if (!toolCallContent.includes(TOOL_CALL_END_MARKER)) {
-        toolCallContent += TOOL_CALL_END_MARKER;
-      }
+      console.log("Handling unfinished tool call at end of stream");
+      console.log("Unfinished tool call content length:", toolCallContent.length);
+      
+      try {
+        // Make sure we have the closing tag - following Python reference
+        let messageWithClosingTag = toolCallContent;
+        if (!toolCallContent.includes(TOOL_CALL_END_MARKER)) {
+          messageWithClosingTag = toolCallContent + TOOL_CALL_END_MARKER;
+          console.log("Added closing tag to unfinished tool call");
+        }
+        
+        // Similar to the full response handler, force a UI update first
+        if (handlers.setMessages) {
+          // Use a direct update method focused on finding the right message
+          handlers.setMessages((prevMessages) => {
+            const newMessages = [...prevMessages];
+            
+            // Find the most recent messages that is from the assistant
+            const assistantMessages = newMessages
+              .filter(m => m.role === "assistant")
+              .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+            
+            if (assistantMessages.length > 0) {
+              // Get the most recent assistant message
+              const messageToUpdate = assistantMessages[0];
+              console.log("Found message to update with ID:", messageToUpdate.id);
+              
+              // Try to get a good tool name from the content - with enhanced extraction
+              let toolName = "unfinished_tool";
+              try {
+                // First, log the exact tool call for debugging
+                const rawContent = messageWithClosingTag.replace(TOOL_CALL_START_MARKER, "").replace(TOOL_CALL_END_MARKER, "").trim();
+                console.log("Raw unfinished tool call content:", rawContent);
+                
+                // Extract the content between the markers
+                const content = extractToolCallContent(messageWithClosingTag);
+                console.log("Extracted unfinished content:", content);
+                
+                if (content) {
+                  // Log the content we're trying to parse
+                  console.log("Content to parse for unfinished tool:", content);
+                  
+                  // Try multiple approaches to extract the name - same approach as above
+                  
+                  // 1. Try to parse as JSON first
+                  try {
+                    // Try to fix common JSON issues first
+                    let fixedContent = content;
+                    
+                    // If content starts with unexpected characters, try to find valid JSON
+                    if (fixedContent.startsWith('}') || fixedContent.startsWith('"')) {
+                      const jsonStart = fixedContent.indexOf('{');
+                      if (jsonStart >= 0) {
+                        fixedContent = fixedContent.substring(jsonStart);
+                        console.log("Fixed unfinished content by finding proper JSON start");
+                      }
+                    }
+                    
+                    // Try parsing the cleaned content
+                    const jsonObj = JSON.parse(fixedContent);
+                    console.log("Parsed JSON (unfinished):", jsonObj);
+                    
+                    if (jsonObj.function && jsonObj.function.name) {
+                      toolName = jsonObj.function.name;
+                      console.log("Found unfinished tool name from JSON:", toolName);
+                    }
+                  } catch (jsonError) {
+                    console.log("JSON parse failed (unfinished):", jsonError.message);
+                    
+                    // 2. Try regex for function.name format
+                    const functionNameMatch = content.match(/"function"[^}]*"name"\s*:\s*"([^"]+)"/);
+                    if (functionNameMatch && functionNameMatch[1]) {
+                      toolName = functionNameMatch[1];
+                      console.log("Found unfinished tool name from function regex:", toolName);
+                    } else {
+                      // 3. Try simple name regex
+                      const nameMatch = content.match(/"name"\s*:\s*"([^"]+)"/);
+                      if (nameMatch && nameMatch[1]) {
+                        toolName = nameMatch[1];
+                        console.log("Found unfinished tool name from simple regex:", toolName);
+                      } else {
+                        // 4. Last resort - try to find any quoted word that might be a name
+                        const wordMatch = content.match(/"([^"]+)"/);
+                        if (wordMatch && wordMatch[1] && wordMatch[1].length > 1) {
+                          // Only use if it looks like a reasonable name
+                          toolName = wordMatch[1];
+                          console.log("Found potential unfinished tool name from quotes:", toolName);
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.error("Error extracting tool name from unfinished call:", e);
+              }
+              
+              // Final sanitization - ensure the tool name doesn't contain invalid characters
+              if (toolName.includes('data:') || toolName.includes('}') || toolName.includes('{')) {
+                // Try one more generic approach - look for name field in the function
+                const nameMatch = messageWithClosingTag.match(/["']name["']\s*:\s*["']([^"']+)["']/);
+                if (nameMatch && nameMatch[1]) {
+                  toolName = nameMatch[1];
+                  console.log("Found tool name from final regex for unfinished call:", toolName);
+                } else {
+                  toolName = "unfinished_tool";
+                  console.log("Sanitized invalid unfinished tool name");
+                }
+              }
+              
+              console.log("Using final tool name for unfinished call:", toolName);
+              
+              // Add the tool to the message - force it even if there's already a tool
+              messageToUpdate.processingTool = {
+                name: toolName, 
+                status: "calling",
+                functionCall: messageWithClosingTag
+              };
+            } else {
+              console.error("No assistant messages found to update for unfinished tool call");
+            }
+            
+            return newMessages;
+          });
+        }
+        
+        // Wait longer to ensure UI is updated
+        await new Promise(resolve => setTimeout(resolve, 300));
 
-      // Process the tool call
-      const result = await handleToolCall(
-        toolCallContent,
-        currentContent,
-        handlers,
-        messages,
-        modelId || modelName || "",
-        abortSignal,
-        sessionId
-      );
+        // Process the tool call with the added closing tag
+        const result = await handleToolCall(
+          messageWithClosingTag,
+          currentContent,
+          handlers,
+          messages,
+          modelId || modelName || "",
+          abortSignal,
+          sessionId
+        );
 
-      // Update session ID if it changed
-      if (result.sessionId) {
-        sessionId = result.sessionId;
+        // Update session ID if it changed
+        if (result.sessionId) {
+          sessionId = result.sessionId;
+        }
+      } catch (error) {
+        console.error("Error processing unfinished tool call:", error);
       }
     }
 

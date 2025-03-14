@@ -27,83 +27,213 @@ interface ToolResultProps {
 
 // Add the ToolResult component using Tailwind classes
 function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
-  // Helper function to format function call content
+  // Enhanced function to format function call content
   const formatFunctionCall = (rawContent: string | undefined): string => {
     if (!rawContent) return "";
     
+    console.log("Raw function call in UI:", rawContent);
+    
     try {
+      // First remove any tool call markers
+      const contentWithoutMarkers = rawContent.replace(/<tool_call>|<\/tool_call>/g, "").trim();
+      
       // Check if this is a streaming format with data: markers
-      if (rawContent.includes("<tool_call>") && rawContent.includes("data:")) {
-        // Extract the actual function call JSON from the streaming format
-        let functionCallJson = "";
+      if (contentWithoutMarkers.includes("data:")) {
+        console.log("Handling streaming format in UI");
         
-        // Try to extract the complete JSON object
-        const functionMatch = rawContent.match(/\{\s*"function"\s*:\s*\{[^}]*\}\s*\}/);
-        if (functionMatch && functionMatch[0]) {
-          // We found a complete function object
-          functionCallJson = functionMatch[0];
-        } else {
-          // Need to reconstruct from chunks
-          const chunks = rawContent
-            .replace(/<tool_call>|<\/tool_call>/g, "")
-            .split(/\n/)
-            .filter(line => line.trim() && line.includes("data:"));
-          
-          // Extract content from each chunk
-          let reconstructed = "";
-          for (const chunk of chunks) {
-            const contentMatch = chunk.match(/data:\s*(\{.*\})/);
-            if (contentMatch && contentMatch[1]) {
+        // Extract all content from data: {"content": "..."} format
+        let combinedContent = "";
+        
+        // Process line by line
+        const lines = contentWithoutMarkers.split('\n');
+        for (const line of lines) {
+          // Look for data: {"content": "..."} pattern
+          const match = line.match(/data:\s*{"content":\s*"(.*)"\}/);
+          if (match && match[1]) {
+            // Extract just the content and unescape it
+            let extracted = match[1]
+              .replace(/\\n/g, '\n')
+              .replace(/\\"/g, '"')
+              .replace(/\\\\/g, '\\');
+            combinedContent += extracted;
+          } else if (!line.includes('data: [DONE]')) {
+            // Include non-data lines (but skip [DONE] markers)
+            combinedContent += line;
+          }
+        }
+        
+        console.log("Extracted combined content:", combinedContent);
+        
+        // Clean up and manually reconstruct the function call JSON if needed
+        if (combinedContent.includes('"function"') && combinedContent.includes('"name"')) {
+          // Try to directly parse it first
+          try {
+            const parsed = JSON.parse(combinedContent);
+            return JSON.stringify(parsed, null, 2);
+          } catch (e) {
+            console.log("Parsing combined content failed, trying to reconstruct function call");
+            
+            // Handle any case where we have name, whether function is present or not
+            // This is more general and will work even if function key is completely missing
+            const nameMatch = combinedContent.match(/"name"\s*:\s*"([^"]+)"/);
+            if (nameMatch && nameMatch[1]) {
+              console.log("Found tool name for reconstruction:", nameMatch[1]);
+              
+              // Try to extract arguments
+              let toolArgs = {};
+              
               try {
-                const chunkData = JSON.parse(contentMatch[1]);
-                if (chunkData.content) {
-                  reconstructed += chunkData.content.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+                // Try different regex patterns for arguments
+                const argsPatterns = [
+                  /"arguments"\s*:\s*(\{[^}]*\})/,  // Standard format
+                  /"arguments"\s*:\s*(\{[\s\S]*?\}(?=\s*\}))/,  // Multi-line format
+                  /"cmd"\s*:\s*"([^"]+)"/  // Direct cmd extraction
+                ];
+                
+                for (const pattern of argsPatterns) {
+                  const argsMatch = combinedContent.match(pattern);
+                  if (argsMatch && argsMatch[1]) {
+                    if (pattern.toString().includes("cmd")) {
+                      // For direct cmd extraction, create the arguments object
+                      toolArgs = { cmd: argsMatch[1] };
+                      console.log("Extracted cmd directly:", argsMatch[1]);
+                      break;
+                    } else {
+                      // For JSON objects, parse them
+                      try {
+                        toolArgs = JSON.parse(argsMatch[1]);
+                        console.log("Parsed arguments:", toolArgs);
+                        break;
+                      } catch (e) {
+                        console.log("Failed to parse args match:", argsMatch[1]);
+                      }
+                    }
+                  }
                 }
               } catch (e) {
-                // If we can't parse as JSON, just extract what's between data: and the end
-                const simpleMatch = chunk.match(/data:\s*(.*)/);
-                if (simpleMatch && simpleMatch[1]) {
-                  reconstructed += simpleMatch[1];
-                }
+                console.log("Error extracting arguments:", e);
               }
+              
+              // Build a complete function call object
+              const functionObj = {
+                function: {
+                  name: nameMatch[1],
+                  arguments: toolArgs
+                }
+              };
+              
+              console.log("Reconstructed function object:", functionObj);
+              return JSON.stringify(functionObj, null, 2);
             }
+            
+            // If we failed to reconstruct, fallback to what we have
+            return combinedContent;
           }
-          
-          // Clean up the reconstructed content
-          functionCallJson = reconstructed
-            .replace(/\\n/g, "\n")
-            .replace(/\\"/g, '"')
-            .trim();
         }
         
-        // Try to parse and pretty-print the function call
+        // If no function key detected, try to detect JSON and pretty print
         try {
-          // If it's not a complete JSON object, try to make it one
-          if (!functionCallJson.startsWith("{")) {
-            functionCallJson = "{" + functionCallJson;
+          // Find JSON start
+          const jsonStart = combinedContent.indexOf('{');
+          if (jsonStart >= 0) {
+            // Try to clean the JSON by starting from the first {
+            const cleanedJson = combinedContent.substring(jsonStart);
+            const parsed = JSON.parse(cleanedJson);
+            return JSON.stringify(parsed, null, 2);
           }
-          if (!functionCallJson.endsWith("}")) {
-            functionCallJson = functionCallJson + "}";
-          }
-          
-          const parsed = JSON.parse(functionCallJson);
-          return JSON.stringify(parsed, null, 2);
         } catch (e) {
-          // If we can't parse it as JSON, return the cleaned content
-          return functionCallJson;
+          // Not valid JSON, return as-is
+          return combinedContent;
         }
+        
+        // Return combined content if nothing else worked
+        return combinedContent;
       } else {
-        // For non-streaming format, just clean and format
-        const cleaned = rawContent
-          .replace(/<tool_call>|<\/tool_call>/g, "")
+        // For non-streaming format, clean and try to format as JSON
+        const cleaned = contentWithoutMarkers
           .replace(/\\n/g, "\n")
           .replace(/\\"/g, '"')
           .trim();
         
         try {
+          // Handle any content that contains a name attribute (more general)
+          if (cleaned.includes('"name"')) {
+            const nameMatch = cleaned.match(/"name"\s*:\s*"([^"]+)"/);
+            
+            if (nameMatch && nameMatch[1]) {
+              console.log("Found tool name in non-streaming content:", nameMatch[1]);
+              
+              // Try to extract arguments using multiple patterns
+              let toolArgs = {};
+              
+              try {
+                // Try different regex patterns for arguments
+                const argsPatterns = [
+                  /"arguments"\s*:\s*(\{[^}]*\})/,  // Standard format
+                  /"arguments"\s*:\s*(\{[\s\S]*?\}(?=\s*\}))/,  // Multi-line format
+                  /"cmd"\s*:\s*"([^"]+)"/  // Direct cmd extraction
+                ];
+                
+                for (const pattern of argsPatterns) {
+                  const argsMatch = cleaned.match(pattern);
+                  if (argsMatch && argsMatch[1]) {
+                    if (pattern.toString().includes("cmd")) {
+                      // For direct cmd extraction, create the arguments object
+                      toolArgs = { cmd: argsMatch[1] };
+                      console.log("Extracted cmd directly from non-streaming:", argsMatch[1]);
+                      break;
+                    } else {
+                      // For JSON objects, parse them
+                      try {
+                        toolArgs = JSON.parse(argsMatch[1]);
+                        console.log("Parsed arguments from non-streaming:", toolArgs);
+                        break;
+                      } catch (e) {
+                        console.log("Failed to parse args match in non-streaming:", argsMatch[1]);
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.log("Error extracting arguments from non-streaming:", e);
+              }
+              
+              // Only reconstruct if function key is missing
+              if (!cleaned.includes('"function"')) {
+                // Reconstruct a proper function call object
+                const functionObj = {
+                  function: {
+                    name: nameMatch[1],
+                    arguments: toolArgs
+                  }
+                };
+                
+                console.log("Reconstructed function object for non-streaming:", functionObj);
+                return JSON.stringify(functionObj, null, 2);
+              }
+            }
+          }
+          
+          // Try standard JSON parsing
           const parsed = JSON.parse(cleaned);
           return JSON.stringify(parsed, null, 2);
         } catch (e) {
+          console.log("Error parsing cleaned content:", e);
+          
+          // Try to find and extract any JSON-like structure
+          const jsonStart = cleaned.indexOf('{');
+          if (jsonStart >= 0) {
+            try {
+              // Extract everything from the first { to end
+              const jsonPart = cleaned.substring(jsonStart);
+              const parsed = JSON.parse(jsonPart);
+              return JSON.stringify(parsed, null, 2);
+            } catch (jsonError) {
+              // If all parsing fails, return as-is
+              return cleaned;
+            }
+          }
+          
           return cleaned;
         }
       }
