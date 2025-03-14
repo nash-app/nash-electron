@@ -28,8 +28,72 @@ interface ToolResultProps {
 
 // Add the ToolResult component using Tailwind classes
 function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
+  // Helper function to format function call content
+  const formatFunctionCall = (rawContent: string | undefined): string => {
+    if (!rawContent) return "";
+    
+    try {
+      // Remove SSE data format
+      const cleanedContent = rawContent
+        .replace(/<tool_call>|<\/tool_call>/g, "")
+        .split("\n")
+        .filter(line => line.trim())
+        .map(line => {
+          // Extract content from data: {"content": "..."} format
+          const contentMatch = line.match(/data: {"content": "(.*)"}/);
+          if (contentMatch && contentMatch[1]) {
+            return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+          }
+          return "";
+        })
+        .join("");
+      
+      // Try to parse as JSON to format it nicely
+      try {
+        // Check if the content starts with a valid JSON character
+        let jsonString = cleanedContent.trim();
+        
+        // If it doesn't start with {, add it
+        if (!jsonString.startsWith("{")) {
+          jsonString = "{" + jsonString;
+        }
+        
+        // If it doesn't end with }, add it
+        if (!jsonString.endsWith("}")) {
+          jsonString = jsonString + "}";
+        }
+        
+        // Now try to parse it
+        const jsonObj = JSON.parse(jsonString);
+        return JSON.stringify(jsonObj, null, 2);
+      } catch (e) {
+        // If not valid JSON, return the cleaned content
+        console.warn("Failed to parse as JSON:", e);
+        
+        // Try a more aggressive approach to fix the JSON
+        try {
+          // Look for the function object pattern
+          const functionMatch = cleanedContent.match(/["']function["']\s*:\s*\{([\s\S]*)/);
+          if (functionMatch) {
+            const jsonString = "{" + functionMatch[0];
+            const jsonObj = JSON.parse(jsonString);
+            return JSON.stringify(jsonObj, null, 2);
+          }
+        } catch (innerError) {
+          // If that also fails, just return the cleaned content
+          console.warn("Failed aggressive JSON parsing:", innerError);
+        }
+        
+        return cleanedContent;
+      }
+    } catch (e) {
+      console.error("Error formatting function call:", e);
+      return rawContent;
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <Badge
           variant="secondary"
@@ -79,7 +143,7 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
               Function Call
             </div>
             <pre className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
-              {tool.functionCall}
+              {formatFunctionCall(tool.functionCall)}
             </pre>
           </div>
           {tool.response && (
