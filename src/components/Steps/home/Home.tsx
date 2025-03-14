@@ -49,7 +49,7 @@ import { ChatMessages } from "./components/ChatMessages";
 import { ConfigAlerts } from "./components/ConfigAlerts";
 import { ALL_MODELS } from "./constants";
 import { streamCompletion, summarizeConversation } from "./chatService";
-import { getProviderConfig, logMessageHistory } from "./utils";
+
 
 // Define StreamHandlers interface locally
 interface StreamHandlers {
@@ -159,15 +159,12 @@ const useToolHandler = (
   const handleToolCall = useCallback(
     async (name: string, args: Record<string, any>) => {
       if (isProcessingToolRef.current) {
-        console.log("[handleToolCall] Tool call already in progress, skipping");
         return Promise.reject(new Error("Tool call already in progress"));
       }
 
-      console.log("[handleToolCall] Starting tool call:", { name, args });
       isProcessingToolRef.current = true;
 
       try {
-        console.log("[handleToolCall] Making request to tool endpoint");
         const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -179,7 +176,6 @@ const useToolHandler = (
         }
 
         const result = await response.json();
-        console.log("[handleToolCall] Tool call successful, result:", result);
 
         isProcessingToolRef.current = false;
         return result;
@@ -211,7 +207,6 @@ const useChatInteraction = (
 
   const handleStop = useCallback(() => {
     if (abortControllerRef.current) {
-      console.log("[handleStop] Aborting current stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
@@ -222,19 +217,10 @@ const useChatInteraction = (
   const handleSubmit = useCallback(
     async (input: string) => {
       if (!input.trim() || !selectedModel) {
-        console.log("[handleSubmit] Submission blocked:", {
-          hasInput: !!input.trim(),
-          hasModel: !!selectedModel,
-        });
         return;
       }
 
       setIsSubmitting(true);
-      
-      console.log(
-        "[handleSubmit] Starting submission with model:",
-        selectedModel
-      );
 
       const userMessage: ChatMessage = {
         id: uuidv4(),
@@ -243,19 +229,10 @@ const useChatInteraction = (
         timestamp: new Date(),
       };
 
-      // Log the state before adding messages
-      console.log("[handleSubmit] Messages BEFORE adding user message:");
-      logMessageHistory(chatState.messages, "BEFORE_ADDING");
-
-      // Add the user message to the state
-      console.log("[handleSubmit] Adding user message:", userMessage.id);
       chatState.addMessage(userMessage);
       
-      // Create a new array with the user message added
-      // This ensures we have the updated messages immediately without waiting for state update
       const updatedMessages = [...chatState.messages, userMessage];
       
-      // Create an assistant message
       const assistantMessage: ChatMessage = {
         id: uuidv4(),
         role: "assistant",
@@ -264,81 +241,44 @@ const useChatInteraction = (
         isStreaming: true,
       };
       
-      // Add the assistant message to the state
-      console.log("[handleSubmit] Adding assistant message:", assistantMessage.id);
       chatState.addMessage(assistantMessage);
       
-      // Add the assistant message to our local array as well
       updatedMessages.push(assistantMessage);
-      
-      // Log the updated messages array
-      console.log("[handleSubmit] Updated messages array:");
-      logMessageHistory(updatedMessages, "UPDATED_MESSAGES");
       
       currentContentRef.current = "";
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      console.log("[handleSubmit] Created new AbortController");
 
       try {
-        console.log("[handleSubmit] Starting streamCompletion with messages:", 
-          updatedMessages.map(m => ({ id: m.id, role: m.role }))
-        );
-        
-        // Create handlers object for streamCompletion
         const handlers: StreamHandlers = {
           onChunk: (chunk: string, newSessionId?: string) => {
             if (newSessionId) {
-              console.log("[handleSubmit] Received session ID:", newSessionId);
               chatState.setSessionId(newSessionId);
               return;
             }
             
-            console.log("[handleSubmit] Received chunk:", chunk);
-            
             if (!chunk) {
-              console.log("[handleSubmit] Empty chunk received, skipping");
               return;
             }
             
-            // Directly update the messages state
             chatState.setMessages((prevMessages) => {
-              console.log("[handleSubmit] Updating messages state with chunk:", chunk);
-              console.log("[handleSubmit] Current messages:", 
-                prevMessages.map(m => ({ 
-                  id: m.id, 
-                  role: m.role, 
-                  content: m.content?.substring(0, 20),
-                  isStreaming: m.isStreaming
-                }))
-              );
-              
-              // Create a new array to avoid mutating the previous state
               const newMessages = [...prevMessages];
               
-              // Find the assistant message that is streaming
               const assistantIndex = newMessages.findIndex(
                 m => m.role === "assistant" && m.isStreaming === true
               );
               
               if (assistantIndex >= 0) {
-                // Get the assistant message
                 const assistantMessage = newMessages[assistantIndex];
-                console.log("[handleSubmit] Found assistant message to update:", assistantMessage.id);
-                console.log("[handleSubmit] Current content:", assistantMessage.content);
                 
-                // Create a new message object with the updated content
                 const updatedContent = (assistantMessage.content || "") + chunk;
                 newMessages[assistantIndex] = {
                   ...assistantMessage,
                   content: updatedContent
                 };
-                
-                console.log("[handleSubmit] Updated assistant message content:", updatedContent);
               } else {
                 console.warn("[handleSubmit] No assistant message found to update");
-                console.log("[handleSubmit] Messages:", newMessages);
               }
               
               return newMessages;
@@ -348,7 +288,6 @@ const useChatInteraction = (
           setMessages: chatState.setMessages
         };
         
-        // Use the updatedMessages array instead of chatState.messages
         await streamCompletion(
           updatedMessages,
           handlers,
@@ -357,29 +296,20 @@ const useChatInteraction = (
           chatState.sessionId
         );
         
-        // Mark the assistant message as not streaming when the stream is complete
         chatState.setMessages((prevMessages) => {
-        
-          
-          // Create a new array to avoid mutating the previous state
           const newMessages = [...prevMessages];
           
-          // Find the assistant message that is streaming
           const assistantIndex = newMessages.findIndex(
             m => m.role === "assistant" && m.isStreaming === true
           );
           
           if (assistantIndex >= 0) {
-            // Get the assistant message
             const assistantMessage = newMessages[assistantIndex];
-         
             
-            // Create a new message object with isStreaming set to false
             newMessages[assistantIndex] = {
               ...assistantMessage,
               isStreaming: false
             };
-            
           }
           
           return newMessages;
@@ -398,15 +328,10 @@ const useChatInteraction = (
             ...msg,
             isStreaming: false,
           }));
-         
         }
       } finally {
         abortControllerRef.current = null;
         setIsSubmitting(false);
-        
-        // Log the final state after completion
-       
-        logMessageHistory(chatState.messages, "AFTER_COMPLETION");
       }
     },
     [selectedModel, chatState, handleToolCall]
@@ -467,19 +392,15 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Load configured providers on mount
   useEffect(() => {
     const loadConfiguredProviders = async () => {
-   
       try {
         const keys = await window.electron.getKeys();
         const providers = new Set(keys.map((k) => k.provider));
-   
         setConfiguredProviders(providers);
 
         if (!selectedModel) {
-       
           if (providers.has("anthropic")) {
             setSelectedModel("claude-3-7-sonnet-latest");
           } else if (providers.has("openai")) {
-       
             setSelectedModel("o3-mini");
           }
         }
@@ -512,19 +433,10 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Monitor selected model changes
   useEffect(() => {
     if (selectedModel) {
-      console.log("[modelChangeMonitor] Model changed to:", selectedModel);
       const model = ALL_MODELS.find((m) => m.id === selectedModel);
       if (model) {
         const provider = model.provider;
-        console.log(
-          "[modelChangeMonitor] Checking provider configuration:",
-          provider
-        );
         if (!configuredProviders.has(provider)) {
-          console.log(
-            "[modelChangeMonitor] Provider not configured:",
-            provider
-          );
           setConfigAlerts([
             {
               type: "error",
@@ -538,7 +450,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
             },
           ]);
         } else {
-         
           setConfigAlerts([]);
         }
       }

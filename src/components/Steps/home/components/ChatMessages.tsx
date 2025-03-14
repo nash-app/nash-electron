@@ -32,88 +32,83 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
     if (!rawContent) return "";
     
     try {
-      // Remove SSE data format and concatenate all chunks
-      const cleanedContent = rawContent
-        .replace(/<tool_call>|<\/tool_call>/g, "")
-        .split("\n")
-        .filter(line => line.trim())
-        .map(line => {
-          // Extract content from data: {"content": "..."} format
-          const contentMatch = line.match(/data: {"content": "(.*)"}/);
-          if (contentMatch && contentMatch[1]) {
-            return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
-          }
-          return line; // Keep the original line if it doesn't match the pattern
-        })
-        .join("");
-      
-      // Reconstruct the complete JSON object from chunks
-      let reconstructedJson = "";
-      
-      // First, try to extract the complete JSON structure
-      try {
-        // Remove any non-JSON characters that might be at the beginning or end
-        let jsonString = cleanedContent.trim();
+      // Check if this is a streaming format with data: markers
+      if (rawContent.includes("<tool_call>") && rawContent.includes("data:")) {
+        // Extract the actual function call JSON from the streaming format
+        let functionCallJson = "";
         
-        // Reconstruct the JSON object
-        if (jsonString.includes('"function"')) {
-          // This is likely a function call object
-          reconstructedJson = '{"function": {';
+        // Try to extract the complete JSON object
+        const functionMatch = rawContent.match(/\{\s*"function"\s*:\s*\{[^}]*\}\s*\}/);
+        if (functionMatch && functionMatch[0]) {
+          // We found a complete function object
+          functionCallJson = functionMatch[0];
+        } else {
+          // Need to reconstruct from chunks
+          const chunks = rawContent
+            .replace(/<tool_call>|<\/tool_call>/g, "")
+            .split(/\n/)
+            .filter(line => line.trim() && line.includes("data:"));
           
-          // Extract the name
-          const nameMatch = jsonString.match(/"name":\s*"([^"]+)"/);
-          if (nameMatch) {
-            reconstructedJson += `"name": "${nameMatch[1]}"`;
-          }
-          
-          // Extract arguments if present
-          const argsMatch = jsonString.match(/"arguments":\s*(\{[^}]*\})/);
-          if (argsMatch) {
-            reconstructedJson += `, "arguments": ${argsMatch[1]}`;
-          } else {
-            reconstructedJson += ', "arguments": {}';
-          }
-          
-          reconstructedJson += '}}';
-          
-          // Parse and stringify for formatting
-          try {
-            const jsonObj = JSON.parse(reconstructedJson);
-            return JSON.stringify(jsonObj, null, 2);
-          } catch (e) {
-            console.warn("Failed to parse reconstructed JSON:", e);
-            // If parsing fails, return the raw cleaned content
-            return cleanedContent || jsonString;
-          }
-        }
-        
-        // If we couldn't reconstruct it with the approach above, try a more general approach
-        if (!reconstructedJson) {
-          // Look for key JSON patterns
-          const functionMatch = jsonString.match(/"function"[\s\S]*?{[\s\S]*?}/);
-          if (functionMatch) {
-            reconstructedJson = `{${functionMatch[0]}}`;
-            try {
-              const jsonObj = JSON.parse(reconstructedJson);
-              return JSON.stringify(jsonObj, null, 2);
-            } catch (e) {
-              console.warn("Failed to parse reconstructed JSON:", e);
-              // If parsing fails, return the raw cleaned content
-              return cleanedContent || jsonString;
+          // Extract content from each chunk
+          let reconstructed = "";
+          for (const chunk of chunks) {
+            const contentMatch = chunk.match(/data:\s*(\{.*\})/);
+            if (contentMatch && contentMatch[1]) {
+              try {
+                const chunkData = JSON.parse(contentMatch[1]);
+                if (chunkData.content) {
+                  reconstructed += chunkData.content.replace(/\\n/g, "\n").replace(/\\"/g, '"');
+                }
+              } catch (e) {
+                // If we can't parse as JSON, just extract what's between data: and the end
+                const simpleMatch = chunk.match(/data:\s*(.*)/);
+                if (simpleMatch && simpleMatch[1]) {
+                  reconstructed += simpleMatch[1];
+                }
+              }
             }
           }
+          
+          // Clean up the reconstructed content
+          functionCallJson = reconstructed
+            .replace(/\\n/g, "\n")
+            .replace(/\\"/g, '"')
+            .trim();
         }
         
-        // If all else fails, return the cleaned content
-        return cleanedContent || "Function call content could not be parsed";
-      } catch (e) {
-        console.warn("Failed to reconstruct JSON:", e);
-        // Return the raw cleaned content if reconstruction fails
-        return cleanedContent || "Function call content could not be parsed";
+        // Try to parse and pretty-print the function call
+        try {
+          // If it's not a complete JSON object, try to make it one
+          if (!functionCallJson.startsWith("{")) {
+            functionCallJson = "{" + functionCallJson;
+          }
+          if (!functionCallJson.endsWith("}")) {
+            functionCallJson = functionCallJson + "}";
+          }
+          
+          const parsed = JSON.parse(functionCallJson);
+          return JSON.stringify(parsed, null, 2);
+        } catch (e) {
+          // If we can't parse it as JSON, return the cleaned content
+          return functionCallJson;
+        }
+      } else {
+        // For non-streaming format, just clean and format
+        const cleaned = rawContent
+          .replace(/<tool_call>|<\/tool_call>/g, "")
+          .replace(/\\n/g, "\n")
+          .replace(/\\"/g, '"')
+          .trim();
+        
+        try {
+          const parsed = JSON.parse(cleaned);
+          return JSON.stringify(parsed, null, 2);
+        } catch (e) {
+          return cleaned;
+        }
       }
     } catch (e) {
       console.error("Error formatting function call:", e);
-      // Return the raw content if all else fails
       return rawContent || "Function call content could not be displayed";
     }
   };
@@ -191,9 +186,32 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
                 </svg>
                 Response
               </div>
-              <pre className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
-                {tool.response}
-              </pre>
+              {(() => {
+                // Extract text content from the response if it's in the expected format
+                try {
+                  if (tool.response) {
+                    const responseObj = JSON.parse(tool.response);
+                    if (responseObj.result?.content?.[0]?.type === "text" && 
+                        responseObj.result.content[0].text) {
+                      // If we have the expected format, display the text with preserved newlines
+                      return (
+                        <div className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto text-zinc-300 border border-zinc-800 whitespace-pre-wrap font-mono">
+                          {responseObj.result.content[0].text}
+                        </div>
+                      );
+                    }
+                  }
+                } catch (e) {
+                  console.warn("Failed to parse tool response:", e);
+                }
+                
+                // Fallback to displaying the raw response if parsing fails
+                return (
+                  <pre className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
+                    {tool.response}
+                  </pre>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -225,12 +243,6 @@ const cleanToolCalls = (content: string): string => {
     );
     if (functionMatch && functionMatch[1]) {
       const toolName = functionMatch[1];
-
-      // Special handling for nash_secrets
-      if (toolName === "nash_secrets") {
-        return "I'm checking what secrets are available in your environment...";
-      }
-
       return `I'm using the ${toolName} tool to get information for you...`;
     }
 
@@ -240,11 +252,7 @@ const cleanToolCalls = (content: string): string => {
       return `I'm using the ${simpleMatch[1]} tool to get information for you...`;
     }
 
-    // Check for nash_secrets specifically
-    if (toolCallContent.includes("nash_secrets")) {
-      return "I'm checking what secrets are available in your environment...";
-    }
-
+    // Generic message when we can't extract a specific tool name
     return "I'm using a tool to get information for you...";
   }
 
@@ -268,9 +276,8 @@ export function ChatMessages({
   expandedTools,
   onToggleToolExpand,
 }: ChatMessagesProps) {
-  // Log all messages for debugging
+  // Use effect for logging to avoid JSX issues
   
-
   // Filter out tool result messages that are hidden and messages marked as hidden
   const visibleMessages = messages.filter(
     (m) => !m.toolResult && !m.isHidden
@@ -279,8 +286,6 @@ export function ChatMessages({
   return (
     <div className="flex flex-col gap-3">
       {visibleMessages.map((message) => {
- 
-        
         return (
           <div key={message.id} className="flex flex-col gap-3">
             <Message>

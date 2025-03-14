@@ -63,3 +63,12 @@ export interface SummarizeResponse {
     after: number;
   };
 }
+
+interface ProcessingTool {
+  name: string;
+  displayName?: string;
+  status: "preparing" | "calling" | "completed";
+  response?: string;
+  functionCall?: string;
+  toolCallId?: string;
+}
