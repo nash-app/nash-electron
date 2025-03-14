@@ -61,9 +61,6 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
     throw new Error("Messages must be an array");
   }
 
-  console.log("[prepareMessagesForRequest] Processing messages:", 
-    messages.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) }))
-  );
 
   // Filter messages to only include completed messages, not streaming ones
   // and format them exactly as expected by the server
@@ -75,9 +72,6 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
     return m.role === "user";
   });
 
-  console.log("[prepareMessagesForRequest] Filtered completed messages:", 
-    completedMessages.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) }))
-  );
 
   // Check if we have any messages at all
   if (completedMessages.length === 0) {
@@ -107,59 +101,7 @@ export function prepareMessagesForRequest(messages: ChatMessage[]): {
   return { messagesForRequest, modelName };
 }
 
-// Helper function to make the API request
-const makeApiRequest = async (
-  messages: ChatMessage[],
-  sessionId: string | null,
-  modelId: string,
-  abortSignal: AbortSignal | null
-) => {
-  console.log("[makeApiRequest] Preparing request with sessionId:", sessionId);
 
-  try {
-    const messageHistory = prepareMessagesForRequest(messages);
-    const config = await getProviderConfig(modelId);
-
-    console.log(
-      "[makeApiRequest] Sending request to server with messages:",
-      messageHistory.messagesForRequest.length
-    );
-
-    const response = await fetch(NASH_LOCAL_SERVER_CHAT_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: messageHistory,
-        session_id: sessionId,
-        api_key: config.key,
-        api_base_url: config.baseUrl,
-        model: config.model,
-        provider: config.provider,
-      }),
-      signal: abortSignal || undefined,
-    });
-
-    if (!response.ok) {
-      const errorText = await response
-        .text()
-        .catch(() => "No error text available");
-      console.error("[makeApiRequest] Error response:", {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText,
-      });
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    return response;
-  } catch (error) {
-    console.error(
-      "[makeApiRequest] Error preparing or sending request:",
-      error
-    );
-    throw error;
-  }
-};
 
 // Separate function to extract tool call content even when closing tag is missing
 const extractToolCallContent = (content: string): string | null => {
@@ -180,11 +122,26 @@ const extractToolCallContent = (content: string): string | null => {
     const extractedContent = content
       .substring(startIndex + TOOL_CALL_START_MARKER.length)
       .trim();
+    
+    // Clean up the SSE data format
+    const cleanedContent = extractedContent
+      .split("\n")
+      .filter(line => line.trim())
+      .map(line => {
+        // Extract content from data: {"content": "..."} format
+        const contentMatch = line.match(/data: {"content": "(.*)"}/);
+        if (contentMatch && contentMatch[1]) {
+          return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+        }
+        return line;
+      })
+      .join("");
+    
     console.log(
-      "[extractToolCallContent] Extracted content without end marker:",
-      extractedContent
+      "[extractToolCallContent] Extracted and cleaned content without end marker:",
+      cleanedContent
     );
-    return extractedContent;
+    return cleanedContent;
   }
 
   return null;
@@ -206,7 +163,7 @@ const handleToolCall = async (
     return { success: false, sessionId };
   }
 
-  console.log("[handleToolCall] Processing tool call content");
+  
 
   // Log the raw tool call content for debugging
   console.log("[handleToolCall] RAW TOOL CALL CONTENT:", {
@@ -221,16 +178,58 @@ const handleToolCall = async (
   const extractedContent = extractToolCallContent(toolCallContent);
 
   if (!extractedContent) {
-    console.log("[handleToolCall] No tool call content could be extracted");
+
     return { success: false, sessionId };
   }
 
-  console.log("[handleToolCall] Extracted content:", extractedContent);
 
   // More aggressive approach to find JSON - look for direct JSON after the tool call marker
   const findJsonInToolCall = (content: string) => {
+    // First, clean up the content by removing SSE data format
+    const cleanedContent = content
+      .split("\n")
+      .filter(line => line.trim())
+      .map(line => {
+        // Extract content from data: {"content": "..."} format
+        const contentMatch = line.match(/data: {"content": "(.*)"}/);
+        if (contentMatch && contentMatch[1]) {
+          return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+        }
+        return line;
+      })
+      .join("");
+
+    // Try to reconstruct a complete JSON object
+    if (cleanedContent.includes('"function"')) {
+      try {
+        // This is likely a function call object
+        let reconstructedJson = '{"function": {';
+        
+        // Extract the name
+        const nameMatch = cleanedContent.match(/"name":\s*"([^"]+)"/);
+        if (nameMatch) {
+          reconstructedJson += `"name": "${nameMatch[1]}"`;
+        }
+        
+        // Extract arguments if present
+        const argsMatch = cleanedContent.match(/"arguments":\s*(\{[^}]*\})/);
+        if (argsMatch) {
+          reconstructedJson += `, "arguments": ${argsMatch[1]}`;
+        } else {
+          reconstructedJson += ', "arguments": {}';
+        }
+        
+        reconstructedJson += '}}';
+        
+        return reconstructedJson;
+      } catch (e) {
+        console.warn("[findJsonInToolCall] Failed to reconstruct JSON:", e);
+      }
+    }
+
+    // If the above approach fails, fall back to the original method
     // Find the first { character which might start JSON
-    const jsonStartIndex = content.indexOf("{");
+    const jsonStartIndex = cleanedContent.indexOf("{");
     if (jsonStartIndex < 0) return null;
 
     // Try to extract a complete JSON object
@@ -239,8 +238,8 @@ const handleToolCall = async (
     let inString = false;
     let escapeNext = false;
 
-    for (let i = jsonStartIndex; i < content.length; i++) {
-      const char = content[i];
+    for (let i = jsonStartIndex; i < cleanedContent.length; i++) {
+      const char = cleanedContent[i];
       extracted += char;
 
       if (escapeNext) {
@@ -280,12 +279,13 @@ const handleToolCall = async (
       // Default tool name
       let toolName = "Unknown Tool";
       let functionCall = extractedContent;
-
+      console.log("[handleToolCall] Extracted content:", extractedContent);
       // Try to parse the JSON to get the tool name
       if (extractedJson) {
         try {
           const jsonObj = JSON.parse(extractedJson);
           if (jsonObj.function && jsonObj.function.name) {
+            console.log('@@@', jsonObj,jsonObj.function.name)
             toolName = jsonObj.function.name;
             functionCall = JSON.stringify(jsonObj, null, 2);
             console.log("[handleToolCall] Found tool name in JSON:", toolName);
@@ -322,7 +322,7 @@ const handleToolCall = async (
           newMessages[lastAssistantIndex].processingTool = {
             name: toolName,
             status: "calling",
-            functionCall: functionCall,
+            functionCall: toolCallContent, // Store the raw tool call content
           };
         }
         return newMessages;
@@ -893,19 +893,19 @@ export const streamCompletion = async (
         if (line.startsWith("data: ")) {
           const eventData = line.substring(6);
           if (eventData === "[DONE]") {
-            console.log("[streamCompletion] Received [DONE]");
+        
             continue;
           }
 
           try {
             // Parse the full event object
             const event = JSON.parse(eventData);
-            console.log("[streamCompletion] Parsed event:", event);
+            
 
             // If there's content in this chunk, process it
             if (event.content) {
               const content = event.content;
-              console.log("[streamCompletion] Content from event.content:", content);
+            
               
               // Call the handlers with the content
               handlers.onContent?.(content);
@@ -917,11 +917,11 @@ export const streamCompletion = async (
             // If there's delta.content in this chunk, process it
             if (event.delta?.content) {
               const content = event.delta.content;
-              console.log("[streamCompletion] Content from event.delta.content:", content);
+              
 
               // Check for tool call markers
               if (content.includes(TOOL_CALL_START_MARKER)) {
-                console.log("[streamCompletion] Tool call start detected");
+              
                 inToolCall = true;
 
                 // Extract any content before the tool call
@@ -959,7 +959,7 @@ export const streamCompletion = async (
 
                 // Check if this chunk contains the end marker
                 if (content.includes(TOOL_CALL_END_MARKER)) {
-                  console.log("[streamCompletion] Tool call end detected");
+                 
                   inToolCall = false;
 
                   // Process the tool call
@@ -987,19 +987,17 @@ export const streamCompletion = async (
                 }
               } else {
                 // Regular content
-                console.log("[streamCompletion] Calling handlers with content:", content);
+               
                 handlers.onContent?.(content);
                 handlers.onChunk?.(content);
                 currentContent += content;
               }
             } else if (event.session_id) {
               // Handle session ID updates
-              console.log("[streamCompletion] Received session ID in event:", event.session_id);
+            
               sessionId = event.session_id;
               handlers.onChunk?.("", event.session_id);
-            } else {
-              console.log("[streamCompletion] Event has no content or session_id:", event);
-            }
+            } 
           } catch (error) {
             console.error(
               "[streamCompletion] Error parsing event data:",
@@ -1061,11 +1059,39 @@ export const streamCompletion = async (
                 .replace(TOOL_CALL_START_MARKER, "")
                 .replace(TOOL_CALL_END_MARKER, "")
                 .trim();
-              const jsonMatch = toolCallContent.match(/\{[\s\S]*\}/);
-              if (jsonMatch) {
-                const jsonObj = JSON.parse(jsonMatch[0]);
-                if (jsonObj.function && jsonObj.function.name) {
-                  toolName = jsonObj.function.name;
+              
+              // Clean up the content by removing SSE data format
+              const cleanedContent = toolCallContent
+                .split("\n")
+                .filter(line => line.trim())
+                .map(line => {
+                  // Extract content from data: {"content": "..."} format
+                  const contentMatch = line.match(/data: {"content": "(.*)"}/);
+                  if (contentMatch && contentMatch[1]) {
+                    return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+                  }
+                  return line;
+                })
+                .join("");
+              
+              // Try to extract the tool name using regex
+              const nameMatch = cleanedContent.match(/"name"\s*:\s*"([^"]+)"/);
+              if (nameMatch && nameMatch[1]) {
+                toolName = nameMatch[1];
+              } else if (cleanedContent.includes("nash_secrets")) {
+                toolName = "nash_secrets";
+              } else {
+                // Try to parse as JSON if regex fails
+                const jsonMatch = cleanedContent.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                  try {
+                    const jsonObj = JSON.parse(jsonMatch[0]);
+                    if (jsonObj.function && jsonObj.function.name) {
+                      toolName = jsonObj.function.name;
+                    }
+                  } catch (jsonError) {
+                    console.warn("Error parsing JSON in streamCompletion:", jsonError);
+                  }
                 }
               }
             } catch (e) {
@@ -1078,7 +1104,7 @@ export const streamCompletion = async (
             newMessages[lastAssistantIndex].processingTool = {
               name: toolName,
               status: "calling",
-              functionCall: extractedToolCall,
+              functionCall: extractedToolCall, // Store the raw tool call content
             };
           }
           return newMessages;

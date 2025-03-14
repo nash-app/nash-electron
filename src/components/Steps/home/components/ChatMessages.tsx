@@ -32,7 +32,7 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
     if (!rawContent) return "";
     
     try {
-      // Remove SSE data format
+      // Remove SSE data format and concatenate all chunks
       const cleanedContent = rawContent
         .replace(/<tool_call>|<\/tool_call>/g, "")
         .split("\n")
@@ -43,51 +43,78 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
           if (contentMatch && contentMatch[1]) {
             return contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
           }
-          return "";
+          return line; // Keep the original line if it doesn't match the pattern
         })
         .join("");
       
-      // Try to parse as JSON to format it nicely
+      // Reconstruct the complete JSON object from chunks
+      let reconstructedJson = "";
+      
+      // First, try to extract the complete JSON structure
       try {
-        // Check if the content starts with a valid JSON character
+        // Remove any non-JSON characters that might be at the beginning or end
         let jsonString = cleanedContent.trim();
         
-        // If it doesn't start with {, add it
-        if (!jsonString.startsWith("{")) {
-          jsonString = "{" + jsonString;
-        }
-        
-        // If it doesn't end with }, add it
-        if (!jsonString.endsWith("}")) {
-          jsonString = jsonString + "}";
-        }
-        
-        // Now try to parse it
-        const jsonObj = JSON.parse(jsonString);
-        return JSON.stringify(jsonObj, null, 2);
-      } catch (e) {
-        // If not valid JSON, return the cleaned content
-        console.warn("Failed to parse as JSON:", e);
-        
-        // Try a more aggressive approach to fix the JSON
-        try {
-          // Look for the function object pattern
-          const functionMatch = cleanedContent.match(/["']function["']\s*:\s*\{([\s\S]*)/);
-          if (functionMatch) {
-            const jsonString = "{" + functionMatch[0];
-            const jsonObj = JSON.parse(jsonString);
-            return JSON.stringify(jsonObj, null, 2);
+        // Reconstruct the JSON object
+        if (jsonString.includes('"function"')) {
+          // This is likely a function call object
+          reconstructedJson = '{"function": {';
+          
+          // Extract the name
+          const nameMatch = jsonString.match(/"name":\s*"([^"]+)"/);
+          if (nameMatch) {
+            reconstructedJson += `"name": "${nameMatch[1]}"`;
           }
-        } catch (innerError) {
-          // If that also fails, just return the cleaned content
-          console.warn("Failed aggressive JSON parsing:", innerError);
+          
+          // Extract arguments if present
+          const argsMatch = jsonString.match(/"arguments":\s*(\{[^}]*\})/);
+          if (argsMatch) {
+            reconstructedJson += `, "arguments": ${argsMatch[1]}`;
+          } else {
+            reconstructedJson += ', "arguments": {}';
+          }
+          
+          reconstructedJson += '}}';
+          
+          // Parse and stringify for formatting
+          try {
+            const jsonObj = JSON.parse(reconstructedJson);
+            return JSON.stringify(jsonObj, null, 2);
+          } catch (e) {
+            console.warn("Failed to parse reconstructed JSON:", e);
+            // If parsing fails, return the raw cleaned content
+            return cleanedContent || jsonString;
+          }
         }
         
-        return cleanedContent;
+        // If we couldn't reconstruct it with the approach above, try a more general approach
+        if (!reconstructedJson) {
+          // Look for key JSON patterns
+          const functionMatch = jsonString.match(/"function"[\s\S]*?{[\s\S]*?}/);
+          if (functionMatch) {
+            reconstructedJson = `{${functionMatch[0]}}`;
+            try {
+              const jsonObj = JSON.parse(reconstructedJson);
+              return JSON.stringify(jsonObj, null, 2);
+            } catch (e) {
+              console.warn("Failed to parse reconstructed JSON:", e);
+              // If parsing fails, return the raw cleaned content
+              return cleanedContent || jsonString;
+            }
+          }
+        }
+        
+        // If all else fails, return the cleaned content
+        return cleanedContent || "Function call content could not be parsed";
+      } catch (e) {
+        console.warn("Failed to reconstruct JSON:", e);
+        // Return the raw cleaned content if reconstruction fails
+        return cleanedContent || "Function call content could not be parsed";
       }
     } catch (e) {
       console.error("Error formatting function call:", e);
-      return rawContent;
+      // Return the raw content if all else fails
+      return rawContent || "Function call content could not be displayed";
     }
   };
 
@@ -107,9 +134,9 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
           }}
         >
           <span className="flex items-center gap-1 font-mono">
-            {tool.status === "preparing" && `Preparing ${tool.name}...`}
-            {tool.status === "calling" && `Calling ${tool.name}...`}
-            {tool.status === "completed" && `Used ${tool.name}`}
+            {tool.status === "preparing" && `Preparing ${tool.name} tool...`}
+            {tool.status === "calling" && `Calling ${tool.name} tool...`}
+            {tool.status === "completed" && `Used ${tool.name} tool`}
             {tool.status === "completed" && tool.functionCall && (
               isExpanded ? (
                 <ChevronDown className="h-4 w-4" />
@@ -142,7 +169,7 @@ function ToolResult({ tool, isExpanded, onToggleExpand }: ToolResultProps) {
               Function Call
             </div>
             <pre className="text-sm bg-zinc-900/50 p-3 rounded-md overflow-x-auto font-mono text-zinc-300 border border-zinc-800">
-              {formatFunctionCall(tool.functionCall)}
+              {formatFunctionCall(tool.functionCall) || "No function call content available"}
             </pre>
           </div>
           {tool.response && (
@@ -242,14 +269,7 @@ export function ChatMessages({
   onToggleToolExpand,
 }: ChatMessagesProps) {
   // Log all messages for debugging
-  console.log("[ChatMessages] Rendering with messages:", 
-    messages.map(m => ({ 
-      id: m.id, 
-      role: m.role, 
-      content: m.content?.substring(0, 30),
-      isStreaming: m.isStreaming
-    }))
-  );
+  
 
   // Filter out tool result messages that are hidden
   const visibleMessages = messages.filter(
@@ -259,16 +279,7 @@ export function ChatMessages({
   return (
     <div className="flex flex-col gap-3">
       {visibleMessages.map((message) => {
-        // Check if this message has an unprocessed tool call
-        const unprocessedToolCall = hasUnprocessedToolCall(message);
-        
-        // Log each message as it's rendered
-        console.log("[ChatMessages] Rendering message:", { 
-          id: message.id, 
-          role: message.role, 
-          content: message.content?.substring(0, 30),
-          isStreaming: message.isStreaming
-        });
+ 
         
         return (
           <div key={message.id} className="flex flex-col gap-3">

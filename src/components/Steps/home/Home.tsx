@@ -83,10 +83,10 @@ const useChatState = () => {
   });
 
   const addMessage = useCallback((message: ChatMessage) => {
-    console.log("[useChatState] Adding message:", message.id, message.role);
+    
     setMessages((prev) => {
       const newMessages = [...prev, message];
-      console.log("[useChatState] New messages state:", newMessages.map(m => ({ id: m.id, role: m.role })));
+      
       return newMessages;
     });
   }, []);
@@ -94,9 +94,7 @@ const useChatState = () => {
   const updateLastMessage = useCallback(
     (updater: (message: ChatMessage) => ChatMessage) => {
       setMessages((prev) => {
-        console.log("[useChatState] updateLastMessage - Current messages:", 
-          prev.map(m => ({ id: m.id, role: m.role, content: m.content?.substring(0, 20) }))
-        );
+       
         
         const newMessages = [...prev];
         
@@ -106,15 +104,15 @@ const useChatState = () => {
         );
         
         if (lastAssistantIndex >= 0) {
-          console.log("[useChatState] Updating assistant message:", newMessages[lastAssistantIndex].id);
+         
           const updatedMessage = updater(newMessages[lastAssistantIndex]);
-          console.log("[useChatState] Updated content:", updatedMessage.content);
+         
           newMessages[lastAssistantIndex] = updatedMessage;
         } else {
           // Fallback to updating the last message
           const lastMessage = newMessages[newMessages.length - 1];
           if (lastMessage) {
-            console.log("[useChatState] Updating last message:", lastMessage.id);
+         
             newMessages[newMessages.length - 1] = updater(lastMessage);
           } else {
             console.warn("[useChatState] No message to update");
@@ -361,7 +359,7 @@ const useChatInteraction = (
         
         // Mark the assistant message as not streaming when the stream is complete
         chatState.setMessages((prevMessages) => {
-          console.log("[handleSubmit] Stream complete, marking assistant message as not streaming");
+        
           
           // Create a new array to avoid mutating the previous state
           const newMessages = [...prevMessages];
@@ -374,7 +372,7 @@ const useChatInteraction = (
           if (assistantIndex >= 0) {
             // Get the assistant message
             const assistantMessage = newMessages[assistantIndex];
-            console.log("[handleSubmit] Found assistant message to mark as complete:", assistantMessage.id);
+         
             
             // Create a new message object with isStreaming set to false
             newMessages[assistantIndex] = {
@@ -382,7 +380,6 @@ const useChatInteraction = (
               isStreaming: false
             };
             
-            console.log("[handleSubmit] Marked assistant message as complete");
           }
           
           return newMessages;
@@ -401,14 +398,14 @@ const useChatInteraction = (
             ...msg,
             isStreaming: false,
           }));
-          console.log("[handleSubmit] Request was aborted");
+         
         }
       } finally {
         abortControllerRef.current = null;
         setIsSubmitting(false);
         
         // Log the final state after completion
-        console.log("[handleSubmit] Messages AFTER completion:");
+       
         logMessageHistory(chatState.messages, "AFTER_COMPLETION");
       }
     },
@@ -470,35 +467,24 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Load configured providers on mount
   useEffect(() => {
     const loadConfiguredProviders = async () => {
-      console.log(
-        "[loadConfiguredProviders] Loading provider configurations..."
-      );
+   
       try {
         const keys = await window.electron.getKeys();
         const providers = new Set(keys.map((k) => k.provider));
-        console.log(
-          "[loadConfiguredProviders] Found providers:",
-          Array.from(providers)
-        );
+   
         setConfiguredProviders(providers);
 
         if (!selectedModel) {
-          console.log(
-            "[loadConfiguredProviders] No model selected, selecting default..."
-          );
+       
           if (providers.has("anthropic")) {
-            console.log(
-              "[loadConfiguredProviders] Setting default to Claude 3.7"
-            );
             setSelectedModel("claude-3-7-sonnet-latest");
           } else if (providers.has("openai")) {
-            console.log("[loadConfiguredProviders] Setting default to O3 Mini");
+       
             setSelectedModel("o3-mini");
           }
         }
 
         if (providers.size === 0) {
-          console.log("[loadConfiguredProviders] No providers configured");
           setConfigAlerts([
             {
               type: "error",
@@ -552,16 +538,12 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
             },
           ]);
         } else {
-          console.log(
-            "[modelChangeMonitor] Provider properly configured:",
-            provider
-          );
+         
           setConfigAlerts([]);
         }
       }
     }
   }, [selectedModel, configuredProviders]);
-  console.log("chatState.messages", chatState.messages);
   return (
     <div className="flex flex-col h-full">
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />
