@@ -8,6 +8,7 @@ export interface ChatMessage {
   isStreaming?: boolean;
   isError?: boolean;
   isToolResult?: boolean;
+  isHidden?: boolean;
   toolResult?: {
     toolName: string;
     result: string;

@@ -271,9 +271,9 @@ export function ChatMessages({
   // Log all messages for debugging
   
 
-  // Filter out tool result messages that are hidden
+  // Filter out tool result messages that are hidden and messages marked as hidden
   const visibleMessages = messages.filter(
-    (m) => !m.toolResult 
+    (m) => !m.toolResult && !m.isHidden
   );
 
   return (

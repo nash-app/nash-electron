@@ -361,7 +361,15 @@ const handleToolCall = async (
             console.log(`[handleToolCall] Tool '${toolName}' result:`, result);
 
             // Update the UI with the result
-            updateUIWithToolResult(handlers, toolName, result, messages);
+            await updateUIWithToolResult(
+              handlers,
+              toolName,
+              result,
+              messages,
+              modelId,
+              abortSignal,
+              sessionId
+            );
 
             return { success: true, sessionId };
           }
@@ -372,7 +380,15 @@ const handleToolCall = async (
             console.log(`[handleToolCall] Tool '${toolName}' result:`, result);
 
             // Update the UI with the result
-            updateUIWithToolResult(handlers, toolName, result, messages);
+            await updateUIWithToolResult(
+              handlers,
+              toolName,
+              result,
+              messages,
+              modelId,
+              abortSignal,
+              sessionId
+            );
 
             return { success: true, sessionId };
           }
@@ -405,7 +421,15 @@ const handleToolCall = async (
           console.log(`[handleToolCall] Tool 'nash_secrets' result:`, result);
 
           // Update the UI with the result
-          updateUIWithToolResult(handlers, "nash_secrets", result, messages);
+          await updateUIWithToolResult(
+            handlers,
+            "nash_secrets",
+            result,
+            messages,
+            modelId,
+            abortSignal,
+            sessionId
+          );
 
           return { success: true, sessionId };
         }
@@ -418,7 +442,15 @@ const handleToolCall = async (
           console.log(`[handleToolCall] Tool '${toolName}' result:`, result);
 
           // Update the UI with the result
-          updateUIWithToolResult(handlers, toolName, result, messages);
+          await updateUIWithToolResult(
+            handlers,
+            toolName,
+            result,
+            messages,
+            modelId,
+            abortSignal,
+            sessionId
+          );
 
           return { success: true, sessionId };
         } catch (e) {
@@ -485,11 +517,14 @@ const handleToolCall = async (
 };
 
 // Helper function to update the UI with tool results
-const updateUIWithToolResult = (
+const updateUIWithToolResult = async (
   handlers: StreamHandlers,
   toolName: string,
   result: any,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  modelId: string = "",
+  abortSignal: AbortSignal | null = null,
+  sessionId: string | null = null
 ) => {
   if (!handlers.setMessages) return;
 
@@ -518,6 +553,8 @@ const updateUIWithToolResult = (
   });
 
   // Add a message for the tool result
+  let updatedMessages: ChatMessage[] = [];
+  
   handlers.setMessages((prevMessages) => {
     // Find the last assistant message (which likely contained the tool call)
     const lastAssistantIndex = prevMessages.findIndex(
@@ -553,12 +590,56 @@ const updateUIWithToolResult = (
 
       // Insert the tool result message after the assistant message
       newMessages.splice(lastAssistantIndex + 1, 0, toolResultMessage);
+      updatedMessages = newMessages;
       return newMessages;
     }
 
     // Fallback: just append the tool result message
-    return [...prevMessages, toolResultMessage];
+    updatedMessages = [...prevMessages, toolResultMessage];
+    return updatedMessages;
   });
+
+  // Now send the tool result back to the LLM to get a response
+  try {
+    console.log("[updateUIWithToolResult] Sending tool result back to LLM:", {
+      toolName,
+      result: formattedResult,
+    });
+
+    // Create a new message to send to the LLM
+    const toolResultForLLM: ChatMessage = {
+      id: uuidv4(),
+      role: "user",
+      content: `Tool '${toolName}' returned the following result:\n\n\`\`\`\n${formattedResult}\n\`\`\`\n\nPlease analyze this result and provide your insights.`,
+      timestamp: new Date(),
+      isHidden: true, // This message won't be shown in the UI
+    };
+
+    // Add this message to the conversation
+    handlers.setMessages((prevMessages) => {
+      return [...prevMessages, toolResultForLLM];
+    });
+
+    // Get the updated messages
+    const allMessages = [...updatedMessages, toolResultForLLM];
+
+    // Call streamCompletion with the updated messages
+    setTimeout(async () => {
+      try {
+        await streamCompletion(
+          allMessages,
+          handlers,
+          modelId,
+          abortSignal,
+          sessionId
+        );
+      } catch (error) {
+        console.error("[updateUIWithToolResult] Error getting LLM response for tool result:", error);
+      }
+    }, 500); // Small delay to ensure UI updates first
+  } catch (error) {
+    console.error("[updateUIWithToolResult] Error processing tool result:", error);
+  }
 };
 
 // Helper function to process a single line of streamed data
