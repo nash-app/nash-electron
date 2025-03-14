@@ -27,6 +27,9 @@ import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,
   NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
   NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
+  NASH_LOCAL_SERVER_MCP_LIST_TOOLS_ENDPOINT,
+  TOOL_CALL_START_MARKER,
+  TOOL_CALL_END_MARKER,
 } from "../../../constants";
 import {
   Select,
@@ -40,19 +43,13 @@ import {
 import anthropicIcon from "../../../../public/models/anthropic.png";
 import openAIIcon from "../../../../public/models/openai.png";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessage, ChatProps, ConfigAlert } from "./types";
+import { ChatMessage, ChatProps, ConfigAlert, ToolCall } from "./types";
 import { ModelSelector } from "./components/ModelSelector";
 import { ChatMessages } from "./components/ChatMessages";
 import { ConfigAlerts } from "./components/ConfigAlerts";
 import { ALL_MODELS } from "./constants";
 import { streamCompletion, summarizeConversation } from "./chatService";
-
-interface FunctionCall {
-  function: {
-    name: string;
-    arguments: Record<string, any>;
-  };
-}
+import { getProviderConfig, logMessageHistory } from "./utils";
 
 interface ModelConfig {
   provider: string;
@@ -65,65 +62,6 @@ interface ProviderModel {
   name: string;
   provider: string;
 }
-
-const getProviderConfig = async (modelId: string) => {
-  const keys = await window.electron.getKeys();
-  const modelConfigs =
-    (await window.electron.getModelConfigs()) as ModelConfig[];
-
-  const model = ALL_MODELS.find((m) => m.id === modelId);
-  if (!model) {
-    console.error("[getProviderConfig] Model not found:", modelId);
-    throw new Error("Selected model not found.");
-  }
-
-  const key = keys.find((k) => k.provider === model.provider)?.value;
-  const config = modelConfigs.find((c) => c.provider === model.provider);
-
-  if (!key) {
-    console.error(
-      "[getProviderConfig] API key not found for provider:",
-      model.provider
-    );
-    throw new Error(
-      `${
-        model.provider.charAt(0).toUpperCase() + model.provider.slice(1)
-      } API key not found. Please add your API key in the Models section.`
-    );
-  }
-
-  return {
-    key,
-    baseUrl: config?.baseUrl,
-    model: modelId,
-    provider: model.provider,
-  };
-};
-
-const logMessageHistory = (messages: ChatMessage[], context: string) => {
-  console.log("\n");
-  console.log("🔍 ================================");
-  console.log(`📝 MESSAGE HISTORY [${context}]`);
-  console.log("================================");
-  console.log("Total messages:", messages.length);
-  messages.forEach((msg, i) => {
-    console.log("\n-------------------");
-    console.log(`📨 Message ${i + 1}:`);
-    console.log("👤 Role:", msg.role);
-    console.log("🆔 ID:", msg.id);
-    console.log("📄 Content:", msg.content);
-    console.log("🔄 Is Streaming:", msg.isStreaming);
-    if (msg.processingTool) {
-      console.log("🛠  Tool:", {
-        name: msg.processingTool.name,
-        status: msg.processingTool.status,
-        functionCall: msg.processingTool.functionCall,
-        response: msg.processingTool.response,
-      });
-    }
-  });
-  console.log("\n================================\n");
-};
 
 // Custom hook for managing chat state
 const useChatState = () => {
@@ -180,7 +118,7 @@ const useChatState = () => {
   };
 };
 
-// Custom hook for managing tool calls
+// Custom hook for handling tool calls
 const useToolHandler = (
   setMessages: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void,
   isProcessingToolRef: { current: boolean }
@@ -189,37 +127,13 @@ const useToolHandler = (
     async (name: string, args: Record<string, any>) => {
       if (isProcessingToolRef.current) {
         console.log("[handleToolCall] Tool call already in progress, skipping");
-        return;
+        return Promise.reject(new Error("Tool call already in progress"));
       }
-      isProcessingToolRef.current = true;
 
       console.log("[handleToolCall] Starting tool call:", { name, args });
+      isProcessingToolRef.current = true;
 
       try {
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage) {
-            console.log(
-              "[handleToolCall] Setting tool calling state for message:",
-              lastMessage.id
-            );
-            lastMessage.processingTool = {
-              name,
-              status: "calling",
-              functionCall: JSON.stringify(
-                { tool_name: name, arguments: args },
-                null,
-                2
-              ),
-            };
-          }
-          return newMessages;
-        });
-
-        // Add a delay to make the "calling" state visible
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
         console.log("[handleToolCall] Making request to tool endpoint");
         const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
           method: "POST",
@@ -233,50 +147,13 @@ const useToolHandler = (
 
         const result = await response.json();
         console.log("[handleToolCall] Tool call successful, result:", result);
-        
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage?.processingTool) {
-            console.log(
-              "[handleToolCall] Setting tool completed state for message:",
-              lastMessage.id
-            );
-            lastMessage.processingTool = {
-              ...lastMessage.processingTool,
-              status: "completed",
-              response: JSON.stringify(result, null, 2)
-            };
-          }
-          return newMessages;
-        });
 
+        isProcessingToolRef.current = false;
         return result;
       } catch (error) {
         console.error("[handleToolCall] Error:", error);
-        
-        // Check if this is an abort error
-        const isAbortError = error instanceof Error && 
-          (error.name === "AbortError" || error.message === "AbortError");
-        
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage?.processingTool) {
-            lastMessage.processingTool = {
-              ...lastMessage.processingTool,
-              status: "completed",
-              response: isAbortError 
-                ? JSON.stringify({ error: "Tool call was cancelled" }, null, 2)
-                : JSON.stringify({ error: error.message }, null, 2)
-            };
-          }
-          return newMessages;
-        });
-        
-        throw error;
-      } finally {
         isProcessingToolRef.current = false;
+        throw error;
       }
     },
     [setMessages, isProcessingToolRef]
@@ -285,13 +162,23 @@ const useToolHandler = (
   return handleToolCall;
 };
 
+// Return type for the chat interaction hook
+type ChatInteractionHookResult = {
+  handleSubmit: (input: string) => Promise<void>;
+  handleStop: () => void;
+  handleSummarize: () => Promise<void>;
+  isSending: boolean;
+  setIsSending: React.Dispatch<React.SetStateAction<boolean>>;
+  isSubmitting: boolean;
+};
+
 // Custom hook for managing chat interactions
 const useChatInteraction = (
   selectedModel: string,
   chatState: ReturnType<typeof useChatState>
-) => {
+): ChatInteractionHookResult => {
   const abortControllerRef = useRef<AbortController | null>(null);
-  const currentContentRef = useRef("");
+  const [isSending, setIsSending] = useState(false);
   const handleToolCall = useToolHandler(
     chatState.setMessages,
     chatState.isProcessingToolRef
@@ -302,104 +189,262 @@ const useChatInteraction = (
       console.log("[handleStop] Aborting current stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      
+
       // Ensure the UI is updated to reflect the abort
       chatState.updateLastMessage((msg) => ({
         ...msg,
         isStreaming: false,
       }));
     }
-    
+
     // Always reset the tool processing flag to ensure we can start new requests
     chatState.isProcessingToolRef.current = false;
-    
+    setIsSending(false);
+
     console.log("[handleStop] Stream aborted and state reset");
   }, [chatState]);
 
   const handleSubmit = useCallback(
     async (input: string) => {
-      if (!input.trim() || !selectedModel) {
-        console.log("[handleSubmit] Submission blocked:", {
-          hasInput: !!input.trim(),
-          hasModel: !!selectedModel,
-        });
+      if (isSending) {
+        console.log("[handleSubmit] Already sending a message, ignoring...");
         return;
       }
 
-      console.log(
-        "[handleSubmit] Starting submission with model:",
-        selectedModel
-      );
+      // Ignore empty submissions
+      if (!input.trim()) {
+        console.log("[handleSubmit] Empty message, ignoring...");
+        return;
+      }
 
-      const userMessage: ChatMessage = {
-        id: uuidv4(),
-        role: "user",
-        content: input.trim(),
-        timestamp: new Date(),
-      };
-
-      const assistantMessage: ChatMessage = {
-        id: uuidv4(),
-        role: "assistant",
-        content: "",
-        timestamp: new Date(),
-        isStreaming: true,
-      };
-
-      chatState.addMessage(userMessage);
-      chatState.addMessage(assistantMessage);
-      currentContentRef.current = "";
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      console.log("[handleSubmit] Created new AbortController");
+      console.log("[handleSubmit] Starting message submission flow");
+      setIsSending(true);
 
       try {
-        await streamCompletion(
-          [...chatState.messages, userMessage, assistantMessage],
-          chatState.sessionId,
-          controller.signal,
-          (chunk, newSessionId) => {
-            if (newSessionId) {
-              chatState.setSessionId(newSessionId);
-              return;
+        // Ensure chatState.messages is an array
+        if (!chatState.messages || !Array.isArray(chatState.messages)) {
+          console.error(
+            "[handleSubmit] Messages is not an array:",
+            chatState.messages
+          );
+          setIsSending(false);
+          return;
+        }
+
+        // Create a new user message
+        const userMessage: ChatMessage = {
+          id: uuidv4(),
+          role: "user",
+          content: input,
+          timestamp: new Date(),
+        };
+
+        // Create a new array with existing messages plus the new user message
+        // We do this instead of relying on the state update which is asynchronous
+        const messagesWithCurrentInput = [...chatState.messages, userMessage];
+
+        // Verify we have at least one message in the conversation
+        if (messagesWithCurrentInput.length === 0) {
+          const errorMessage = "Please type a message first before submitting.";
+          console.error("[handleSubmit]", errorMessage);
+          chatState.addMessage({
+            id: uuidv4(),
+            role: "assistant",
+            content: `Error: ${errorMessage}`,
+            timestamp: new Date(),
+          });
+          setIsSending(false);
+          return;
+        }
+
+        // Verify the first message is from a user
+        if (messagesWithCurrentInput[0].role !== "user") {
+          const errorMessage =
+            "The conversation must start with a user message. This is required by the AI provider. Please start a new conversation.";
+          console.error("[handleSubmit]", errorMessage);
+          chatState.addMessage({
+            id: uuidv4(),
+            role: "assistant",
+            content: `Error: ${errorMessage}`,
+            timestamp: new Date(),
+          });
+          setIsSending(false);
+          return;
+        }
+
+        // Now add the user message to the UI first
+        chatState.addMessage(userMessage);
+
+        // Create assistant message placeholder
+        const assistantMessage: ChatMessage = {
+          id: uuidv4(),
+          role: "assistant",
+          content: "",
+          timestamp: new Date(),
+          isStreaming: true,
+        };
+        chatState.addMessage(assistantMessage);
+
+        // Cancel any existing request
+        if (abortControllerRef.current) {
+          abortControllerRef.current.abort();
+        }
+
+        // Create a new abort controller for this request
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+
+        // Create handlers object for streamCompletion
+        const handlers = {
+          onChunk: (chunk: string, sessionId?: string) => {
+            if (chunk) {
+              console.log("[handleSubmit] Received chunk:", chunk);
+
+              // Update the content of the latest message
+              chatState.updateLastMessage((msg) => {
+                // Only add unique content
+                if (msg.content && msg.content.endsWith(chunk)) {
+                  console.log(
+                    "[handleSubmit] Preventing duplicate chunk from being added"
+                  );
+                  return msg; // Don't modify message if chunk is already there
+                }
+                return {
+                  ...msg,
+                  content: (msg.content || "") + chunk,
+                };
+              });
             }
-            chatState.updateLastMessage((msg) => ({
-              ...msg,
-              content: (msg.content || "") + chunk,
-            }));
+
+            // If we get a new session ID, update it
+            if (sessionId) {
+              chatState.setSessionId(sessionId);
+            }
           },
+          onContent: (content: string) => {
+            if (content) {
+              console.log("[handleSubmit] Received content:", content);
+
+              // Update the content of the latest message
+              chatState.updateLastMessage((msg) => {
+                // Only add unique content
+                if (msg.content && msg.content.endsWith(content)) {
+                  console.log(
+                    "[handleSubmit] Preventing duplicate content from being added"
+                  );
+                  return msg; // Don't modify message if content is already there
+                }
+                return {
+                  ...msg,
+                  content: (msg.content || "") + content,
+                };
+              });
+            }
+          },
+          onToolCall: handleToolCall,
+          setMessages: chatState.setMessages,
+        };
+
+        const result = await streamCompletion(
+          messagesWithCurrentInput,
+          handlers,
           selectedModel,
-          handleToolCall,
-          chatState.setMessages
+          controller.signal,
+          chatState.sessionId
         );
+
+        // Update session ID if a new one was returned
+        if (result.sessionId && result.sessionId !== chatState.sessionId) {
+          console.log("[handleSubmit] Updating session ID:", result.sessionId);
+          chatState.setSessionId(result.sessionId);
+        }
+
+        // At this point, the entire conversation flow (including any tool calls)
+        // should be complete, and the UI should be updated
+        console.log("[handleSubmit] Conversation flow completed");
       } catch (error) {
         console.error("[handleSubmit] Error in chat stream:", error);
 
-        if (error instanceof Error && error.name !== "AbortError") {
-          chatState.updateLastMessage((msg) => ({
-            ...msg,
-            content: "Sorry, there was an error processing your request.",
-            isStreaming: false,
-          }));
+        if (error instanceof Error) {
+          const errorMessage =
+            error.name === "AbortError"
+              ? "Request was cancelled."
+              : `Error: ${
+                  error.message || "There was an error processing your request."
+                }`;
+
+          // Make sure we add an error message if no assistant message exists
+          const assistantIndex = chatState.messages.findIndex(
+            (msg) => msg.role === "assistant" && msg.isStreaming
+          );
+          const hasAssistantMessage = assistantIndex !== -1;
+
+          if (hasAssistantMessage) {
+            // Update the existing assistant message
+            chatState.updateLastMessage((msg) => ({
+              ...msg,
+              content: errorMessage,
+              isStreaming: false,
+            }));
+          } else {
+            // Add a new assistant message with the error
+            chatState.addMessage({
+              id: uuidv4(),
+              role: "assistant",
+              content: errorMessage,
+              timestamp: new Date(),
+            });
+          }
+
+          if (error.name !== "AbortError") {
+            console.error("[handleSubmit] Non-abort error:", error);
+          } else {
+            console.log("[handleSubmit] Request was aborted");
+          }
         } else {
-          chatState.updateLastMessage((msg) => ({
-            ...msg,
-            isStreaming: false,
-          }));
-          console.log("[handleSubmit] Request was aborted");
+          // Same pattern for unknown errors
+          const assistantIndex = chatState.messages.findIndex(
+            (msg) => msg.role === "assistant" && msg.isStreaming
+          );
+          const hasAssistantMessage = assistantIndex !== -1;
+
+          if (hasAssistantMessage) {
+            chatState.updateLastMessage((msg) => ({
+              ...msg,
+              content:
+                "Sorry, there was an unknown error processing your request.",
+              isStreaming: false,
+            }));
+          } else {
+            chatState.addMessage({
+              id: uuidv4(),
+              role: "assistant",
+              content:
+                "Sorry, there was an unknown error processing your request.",
+              timestamp: new Date(),
+            });
+          }
         }
       } finally {
         abortControllerRef.current = null;
+        setIsSending(false);
       }
     },
-    [selectedModel, chatState, handleToolCall]
+    [chatState, selectedModel, handleToolCall, isSending]
   );
 
   const handleSummarize = useCallback(async () => {
-    if (chatState.messages.length === 0) return;
+    if (
+      !chatState.messages ||
+      !Array.isArray(chatState.messages) ||
+      chatState.messages.length === 0
+    ) {
+      console.log("[handleSummarize] No messages to summarize");
+      return;
+    }
 
     try {
+      setIsSending(true);
       const result = await summarizeConversation(
         chatState.messages,
         chatState.sessionId
@@ -421,13 +466,17 @@ const useChatInteraction = (
       }
     } catch (error) {
       console.error("[handleSummarize] Error:", error);
+    } finally {
+      setIsSending(false);
     }
-  }, [chatState]);
+  }, [chatState, setIsSending]);
 
   return {
     handleSubmit,
     handleStop,
     handleSummarize,
+    isSending,
+    setIsSending,
     isSubmitting: !!abortControllerRef.current,
   };
 };
@@ -440,10 +489,21 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
     new Set()
   );
   const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [showRawMessages, setShowRawMessages] = useState(false);
 
   const chatState = useChatState();
-  const { handleSubmit, handleStop, handleSummarize, isSubmitting } =
+
+  // Get the tool handler directly
+  const toolHandler = useToolHandler(
+    chatState.setMessages,
+    chatState.isProcessingToolRef
+  );
+
+  const { handleSubmit, handleStop, handleSummarize, isSending, setIsSending } =
     useChatInteraction(selectedModel, chatState);
+
+  // Toggle function for raw messages
+  const toggleRawMessages = () => setShowRawMessages(!showRawMessages);
 
   // Load configured providers on mount
   useEffect(() => {
@@ -541,97 +601,107 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   }, [selectedModel, configuredProviders]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full flex-col">
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />
-
-      <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
-
-      <div className="flex-1 flex flex-col overflow-hidden">
-        <ChatContainer
-          ref={chatContainerRef}
-          className="flex-1 space-y-2 px-4 pt-8 max-w-4xl mx-auto w-full"
-          autoScroll={true}
-        >
-          <ChatMessages
-            messages={chatState.messages}
-            expandedTools={chatState.expandedTools}
-            onToggleToolExpand={chatState.toggleToolExpand}
-          />
-        </ChatContainer>
-
-        <div className="p-4">
-          <div className="max-w-4xl mx-auto">
-            <PromptInput
-              value={input}
-              onValueChange={setInput}
-              isLoading={isSubmitting}
-              onSubmit={() => {
-                handleSubmit(input);
-                setInput("");
-              }}
-            >
-              <PromptInputTextarea
-                placeholder={
-                  configuredProviders.size === 0
-                    ? "Please add an API key to start chatting..."
-                    : "Ask me anything..."
-                }
-                disabled={isSubmitting || configuredProviders.size === 0}
-                className="!h-[100px] !rounded-md"
+      <div className="flex-1 overflow-hidden">
+        <ChatContainer>
+          <div className="flex h-full flex-col">
+            <div className="flex-1 overflow-y-auto p-4">
+              <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
+              <ChatMessages
+                messages={chatState.messages}
+                expandedTools={chatState.expandedTools}
+                onToggleToolExpand={chatState.toggleToolExpand}
+                showRawMessages={showRawMessages}
               />
-              <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
-                <div className="flex items-center gap-2">
-                  <ModelSelector
-                    selectedModel={selectedModel}
-                    onModelChange={setSelectedModel}
-                    configuredProviders={configuredProviders}
-                    onNavigate={onNavigate}
+            </div>
+            <div className="border-t border-zinc-800 p-4">
+              <div className="max-w-4xl mx-auto">
+                <PromptInput
+                  value={input}
+                  onValueChange={setInput}
+                  isLoading={isSending}
+                  onSubmit={() => {
+                    handleSubmit(input);
+                    setInput("");
+                  }}
+                >
+                  <PromptInputTextarea
+                    placeholder={
+                      configuredProviders.size === 0
+                        ? "Please add an API key to start chatting..."
+                        : "Ask me anything..."
+                    }
+                    disabled={isSending || configuredProviders.size === 0}
+                    className="!h-[100px] !rounded-md"
                   />
-                </div>
-                <div className="flex items-center gap-2">
-                  {chatState.messages.length > 0 && (
-                    <PromptInputAction tooltip="Summarize conversation">
+                  <PromptInputActions className="flex items-center justify-between gap-2 pt-2">
+                    <div className="flex items-center gap-2">
+                      <ModelSelector
+                        selectedModel={selectedModel}
+                        onModelChange={setSelectedModel}
+                        configuredProviders={configuredProviders}
+                        onNavigate={onNavigate}
+                      />
+
+                      {/* Debug button to toggle raw messages */}
                       <Button
                         variant="outline"
-                        size="icon"
-                        className="h-8 w-8 rounded-full"
-                        onClick={handleSummarize}
-                        disabled={
-                          isSubmitting || chatState.messages.length === 0
-                        }
+                        size="sm"
+                        className="h-8 rounded-full text-xs"
+                        onClick={toggleRawMessages}
                       >
-                        <FileText className="h-4 w-4" />
+                        {showRawMessages ? "Hide Raw" : "Show Raw"}
                       </Button>
-                    </PromptInputAction>
-                  )}
-                  <PromptInputAction
-                    tooltip={isSubmitting ? "Stop generation" : "Send message"}
-                  >
-                    <Button
-                      variant="default"
-                      size="icon"
-                      className="h-8 w-8 rounded-full"
-                      onClick={
-                        isSubmitting ? handleStop : () => handleSubmit(input)
-                      }
-                      disabled={
-                        (!input.trim() && !isSubmitting) ||
-                        configuredProviders.size === 0 ||
-                        !selectedModel
-                      }
-                    >
-                      {isSubmitting ? (
-                        <Square className="h-5 w-5" />
-                      ) : (
-                        <ArrowUp className="h-5 w-5" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {chatState.messages && chatState.messages.length > 0 && (
+                        <PromptInputAction tooltip="Summarize conversation">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 rounded-full"
+                            onClick={handleSummarize}
+                            disabled={
+                              isSending ||
+                              !chatState.messages ||
+                              chatState.messages.length === 0
+                            }
+                          >
+                            <FileText className="h-4 w-4" />
+                          </Button>
+                        </PromptInputAction>
                       )}
-                    </Button>
-                  </PromptInputAction>
-                </div>
-              </PromptInputActions>
-            </PromptInput>
+                      <PromptInputAction
+                        tooltip={isSending ? "Stop generation" : "Send message"}
+                      >
+                        <Button
+                          variant="default"
+                          size="icon"
+                          className="h-8 w-8 rounded-full"
+                          onClick={
+                            isSending ? handleStop : () => handleSubmit(input)
+                          }
+                          disabled={
+                            (!input.trim() && !isSending) ||
+                            configuredProviders.size === 0 ||
+                            !selectedModel
+                          }
+                        >
+                          {isSending ? (
+                            <Square className="h-5 w-5" />
+                          ) : (
+                            <ArrowUp className="h-5 w-5" />
+                          )}
+                        </Button>
+                      </PromptInputAction>
+                    </div>
+                  </PromptInputActions>
+                </PromptInput>
+              </div>
+            </div>
           </div>
-        </div>
+        </ChatContainer>
       </div>
     </div>
   );
