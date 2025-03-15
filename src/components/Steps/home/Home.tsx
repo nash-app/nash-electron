@@ -27,6 +27,9 @@ import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,
   NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
   NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
+  NASH_LOCAL_SERVER_MCP_LIST_TOOLS_ENDPOINT,
+  TOOL_CALL_START_MARKER,
+  TOOL_CALL_END_MARKER,
 } from "../../../constants";
 import {
   Select,
@@ -40,18 +43,20 @@ import {
 import anthropicIcon from "../../../../public/models/anthropic.png";
 import openAIIcon from "../../../../public/models/openai.png";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessage, ChatProps, ConfigAlert } from "./types";
+import { ChatMessage, ChatProps, ConfigAlert, ToolCall } from "./types";
 import { ModelSelector } from "./components/ModelSelector";
 import { ChatMessages } from "./components/ChatMessages";
 import { ConfigAlerts } from "./components/ConfigAlerts";
 import { ALL_MODELS } from "./constants";
 import { streamCompletion, summarizeConversation } from "./chatService";
 
-interface FunctionCall {
-  function: {
-    name: string;
-    arguments: Record<string, any>;
-  };
+
+// Define StreamHandlers interface locally
+interface StreamHandlers {
+  onChunk: (chunk: string, sessionId?: string) => void;
+  onToolCall?: (name: string, args: Record<string, any>) => Promise<any>;
+  setMessages?: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void;
+  onContent?: (content: string) => void;
 }
 
 interface ModelConfig {
@@ -66,65 +71,6 @@ interface ProviderModel {
   provider: string;
 }
 
-const getProviderConfig = async (modelId: string) => {
-  const keys = await window.electron.getKeys();
-  const modelConfigs =
-    (await window.electron.getModelConfigs()) as ModelConfig[];
-
-  const model = ALL_MODELS.find((m) => m.id === modelId);
-  if (!model) {
-    console.error("[getProviderConfig] Model not found:", modelId);
-    throw new Error("Selected model not found.");
-  }
-
-  const key = keys.find((k) => k.provider === model.provider)?.value;
-  const config = modelConfigs.find((c) => c.provider === model.provider);
-
-  if (!key) {
-    console.error(
-      "[getProviderConfig] API key not found for provider:",
-      model.provider
-    );
-    throw new Error(
-      `${
-        model.provider.charAt(0).toUpperCase() + model.provider.slice(1)
-      } API key not found. Please add your API key in the Models section.`
-    );
-  }
-
-  return {
-    key,
-    baseUrl: config?.baseUrl,
-    model: modelId,
-    provider: model.provider,
-  };
-};
-
-const logMessageHistory = (messages: ChatMessage[], context: string) => {
-  console.log("\n");
-  console.log("🔍 ================================");
-  console.log(`📝 MESSAGE HISTORY [${context}]`);
-  console.log("================================");
-  console.log("Total messages:", messages.length);
-  messages.forEach((msg, i) => {
-    console.log("\n-------------------");
-    console.log(`📨 Message ${i + 1}:`);
-    console.log("👤 Role:", msg.role);
-    console.log("🆔 ID:", msg.id);
-    console.log("📄 Content:", msg.content);
-    console.log("🔄 Is Streaming:", msg.isStreaming);
-    if (msg.processingTool) {
-      console.log("🛠  Tool:", {
-        name: msg.processingTool.name,
-        status: msg.processingTool.status,
-        functionCall: msg.processingTool.functionCall,
-        response: msg.processingTool.response,
-      });
-    }
-  });
-  console.log("\n================================\n");
-};
-
 // Custom hook for managing chat state
 const useChatState = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -137,17 +83,42 @@ const useChatState = () => {
   });
 
   const addMessage = useCallback((message: ChatMessage) => {
-    setMessages((prev) => [...prev, message]);
+    
+    setMessages((prev) => {
+      const newMessages = [...prev, message];
+      
+      return newMessages;
+    });
   }, []);
 
   const updateLastMessage = useCallback(
     (updater: (message: ChatMessage) => ChatMessage) => {
       setMessages((prev) => {
+       
+        
         const newMessages = [...prev];
-        const lastMessage = newMessages[newMessages.length - 1];
-        if (lastMessage) {
-          newMessages[newMessages.length - 1] = updater(lastMessage);
+        
+        // Find the last assistant message that is streaming
+        const lastAssistantIndex = newMessages.findIndex(
+          m => m.role === "assistant" && m.isStreaming === true
+        );
+        
+        if (lastAssistantIndex >= 0) {
+         
+          const updatedMessage = updater(newMessages[lastAssistantIndex]);
+         
+          newMessages[lastAssistantIndex] = updatedMessage;
+        } else {
+          // Fallback to updating the last message
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage) {
+         
+            newMessages[newMessages.length - 1] = updater(lastMessage);
+          } else {
+            console.warn("[useChatState] No message to update");
+          }
         }
+        
         return newMessages;
       });
     },
@@ -180,7 +151,7 @@ const useChatState = () => {
   };
 };
 
-// Custom hook for managing tool calls
+// Custom hook for handling tool calls
 const useToolHandler = (
   setMessages: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void,
   isProcessingToolRef: { current: boolean }
@@ -188,39 +159,12 @@ const useToolHandler = (
   const handleToolCall = useCallback(
     async (name: string, args: Record<string, any>) => {
       if (isProcessingToolRef.current) {
-        console.log("[handleToolCall] Tool call already in progress, skipping");
-        return;
+        return Promise.reject(new Error("Tool call already in progress"));
       }
+
       isProcessingToolRef.current = true;
 
-      console.log("[handleToolCall] Starting tool call:", { name, args });
-
       try {
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage) {
-            console.log(
-              "[handleToolCall] Setting tool calling state for message:",
-              lastMessage.id
-            );
-            lastMessage.processingTool = {
-              name,
-              status: "calling",
-              functionCall: JSON.stringify(
-                { tool_name: name, arguments: args },
-                null,
-                2
-              ),
-            };
-          }
-          return newMessages;
-        });
-
-        // Add a delay to make the "calling" state visible
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        console.log("[handleToolCall] Making request to tool endpoint");
         const response = await fetch(NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -232,51 +176,13 @@ const useToolHandler = (
         }
 
         const result = await response.json();
-        console.log("[handleToolCall] Tool call successful, result:", result);
-        
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage?.processingTool) {
-            console.log(
-              "[handleToolCall] Setting tool completed state for message:",
-              lastMessage.id
-            );
-            lastMessage.processingTool = {
-              ...lastMessage.processingTool,
-              status: "completed",
-              response: JSON.stringify(result, null, 2)
-            };
-          }
-          return newMessages;
-        });
 
+        isProcessingToolRef.current = false;
         return result;
       } catch (error) {
         console.error("[handleToolCall] Error:", error);
-        
-        // Check if this is an abort error
-        const isAbortError = error instanceof Error && 
-          (error.name === "AbortError" || error.message === "AbortError");
-        
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMessage = newMessages[newMessages.length - 1];
-          if (lastMessage?.processingTool) {
-            lastMessage.processingTool = {
-              ...lastMessage.processingTool,
-              status: "completed",
-              response: isAbortError 
-                ? JSON.stringify({ error: "Tool call was cancelled" }, null, 2)
-                : JSON.stringify({ error: error.message }, null, 2)
-            };
-          }
-          return newMessages;
-        });
-        
-        throw error;
-      } finally {
         isProcessingToolRef.current = false;
+        throw error;
       }
     },
     [setMessages, isProcessingToolRef]
@@ -292,6 +198,8 @@ const useChatInteraction = (
 ) => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentContentRef = useRef("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
   const handleToolCall = useToolHandler(
     chatState.setMessages,
     chatState.isProcessingToolRef
@@ -299,37 +207,20 @@ const useChatInteraction = (
 
   const handleStop = useCallback(() => {
     if (abortControllerRef.current) {
-      console.log("[handleStop] Aborting current stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      
-      // Ensure the UI is updated to reflect the abort
-      chatState.updateLastMessage((msg) => ({
-        ...msg,
-        isStreaming: false,
-      }));
     }
-    
-    // Always reset the tool processing flag to ensure we can start new requests
     chatState.isProcessingToolRef.current = false;
-    
-    console.log("[handleStop] Stream aborted and state reset");
-  }, [chatState]);
+    setIsSubmitting(false);
+  }, [chatState.isProcessingToolRef]);
 
   const handleSubmit = useCallback(
     async (input: string) => {
       if (!input.trim() || !selectedModel) {
-        console.log("[handleSubmit] Submission blocked:", {
-          hasInput: !!input.trim(),
-          hasModel: !!selectedModel,
-        });
         return;
       }
 
-      console.log(
-        "[handleSubmit] Starting submission with model:",
-        selectedModel
-      );
+      setIsSubmitting(true);
 
       const userMessage: ChatMessage = {
         id: uuidv4(),
@@ -338,6 +229,10 @@ const useChatInteraction = (
         timestamp: new Date(),
       };
 
+      chatState.addMessage(userMessage);
+      
+      const updatedMessages = [...chatState.messages, userMessage];
+      
       const assistantMessage: ChatMessage = {
         id: uuidv4(),
         role: "assistant",
@@ -345,34 +240,80 @@ const useChatInteraction = (
         timestamp: new Date(),
         isStreaming: true,
       };
-
-      chatState.addMessage(userMessage);
+      
       chatState.addMessage(assistantMessage);
+      
+      updatedMessages.push(assistantMessage);
+      
       currentContentRef.current = "";
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      console.log("[handleSubmit] Created new AbortController");
 
       try {
-        await streamCompletion(
-          [...chatState.messages, userMessage, assistantMessage],
-          chatState.sessionId,
-          controller.signal,
-          (chunk, newSessionId) => {
+        const handlers: StreamHandlers = {
+          onChunk: (chunk: string, newSessionId?: string) => {
             if (newSessionId) {
               chatState.setSessionId(newSessionId);
               return;
             }
-            chatState.updateLastMessage((msg) => ({
-              ...msg,
-              content: (msg.content || "") + chunk,
-            }));
+            
+            if (!chunk) {
+              return;
+            }
+            
+            chatState.setMessages((prevMessages) => {
+              const newMessages = [...prevMessages];
+              
+              const assistantIndex = newMessages.findIndex(
+                m => m.role === "assistant" && m.isStreaming === true
+              );
+              
+              if (assistantIndex >= 0) {
+                const assistantMessage = newMessages[assistantIndex];
+                
+                const updatedContent = (assistantMessage.content || "") + chunk;
+                newMessages[assistantIndex] = {
+                  ...assistantMessage,
+                  content: updatedContent
+                };
+              } else {
+                console.warn("[handleSubmit] No assistant message found to update");
+              }
+              
+              return newMessages;
+            });
           },
+          onToolCall: handleToolCall,
+          setMessages: chatState.setMessages
+        };
+        
+        await streamCompletion(
+          updatedMessages,
+          handlers,
           selectedModel,
-          handleToolCall,
-          chatState.setMessages
+          controller.signal,
+          chatState.sessionId
         );
+        
+        chatState.setMessages((prevMessages) => {
+          const newMessages = [...prevMessages];
+          
+          const assistantIndex = newMessages.findIndex(
+            m => m.role === "assistant" && m.isStreaming === true
+          );
+          
+          if (assistantIndex >= 0) {
+            const assistantMessage = newMessages[assistantIndex];
+            
+            newMessages[assistantIndex] = {
+              ...assistantMessage,
+              isStreaming: false
+            };
+          }
+          
+          return newMessages;
+        });
       } catch (error) {
         console.error("[handleSubmit] Error in chat stream:", error);
 
@@ -387,10 +328,10 @@ const useChatInteraction = (
             ...msg,
             isStreaming: false,
           }));
-          console.log("[handleSubmit] Request was aborted");
         }
       } finally {
         abortControllerRef.current = null;
+        setIsSubmitting(false);
       }
     },
     [selectedModel, chatState, handleToolCall]
@@ -400,6 +341,7 @@ const useChatInteraction = (
     if (chatState.messages.length === 0) return;
 
     try {
+      setIsSubmitting(true);
       const result = await summarizeConversation(
         chatState.messages,
         chatState.sessionId
@@ -421,6 +363,8 @@ const useChatInteraction = (
       }
     } catch (error) {
       console.error("[handleSummarize] Error:", error);
+    } finally {
+      setIsSubmitting(false);
     }
   }, [chatState]);
 
@@ -428,7 +372,7 @@ const useChatInteraction = (
     handleSubmit,
     handleStop,
     handleSummarize,
-    isSubmitting: !!abortControllerRef.current,
+    isSubmitting,
   };
 };
 
@@ -448,35 +392,20 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Load configured providers on mount
   useEffect(() => {
     const loadConfiguredProviders = async () => {
-      console.log(
-        "[loadConfiguredProviders] Loading provider configurations..."
-      );
       try {
         const keys = await window.electron.getKeys();
         const providers = new Set(keys.map((k) => k.provider));
-        console.log(
-          "[loadConfiguredProviders] Found providers:",
-          Array.from(providers)
-        );
         setConfiguredProviders(providers);
 
         if (!selectedModel) {
-          console.log(
-            "[loadConfiguredProviders] No model selected, selecting default..."
-          );
           if (providers.has("anthropic")) {
-            console.log(
-              "[loadConfiguredProviders] Setting default to Claude 3.7"
-            );
             setSelectedModel("claude-3-7-sonnet-latest");
           } else if (providers.has("openai")) {
-            console.log("[loadConfiguredProviders] Setting default to O3 Mini");
             setSelectedModel("o3-mini");
           }
         }
 
         if (providers.size === 0) {
-          console.log("[loadConfiguredProviders] No providers configured");
           setConfigAlerts([
             {
               type: "error",
@@ -504,19 +433,10 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Monitor selected model changes
   useEffect(() => {
     if (selectedModel) {
-      console.log("[modelChangeMonitor] Model changed to:", selectedModel);
       const model = ALL_MODELS.find((m) => m.id === selectedModel);
       if (model) {
         const provider = model.provider;
-        console.log(
-          "[modelChangeMonitor] Checking provider configuration:",
-          provider
-        );
         if (!configuredProviders.has(provider)) {
-          console.log(
-            "[modelChangeMonitor] Provider not configured:",
-            provider
-          );
           setConfigAlerts([
             {
               type: "error",
@@ -530,16 +450,11 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
             },
           ]);
         } else {
-          console.log(
-            "[modelChangeMonitor] Provider properly configured:",
-            provider
-          );
           setConfigAlerts([]);
         }
       }
     }
   }, [selectedModel, configuredProviders]);
-
   return (
     <div className="flex flex-col h-full">
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />

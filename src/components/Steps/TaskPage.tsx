@@ -216,9 +216,7 @@ export function TaskPage({ onNavigate }: HomePageProps): React.ReactElement {
         return;
       }
 
-      console.log("Adding task:", { taskId, task });
-      const success = await window.electron.addTask(taskId, task);
-      console.log("Add task result:", success);
+      const success = await window.electron.addTask(taskId, task);      
 
       if (success) {
         setTasks({ ...tasks, [taskId]: task });

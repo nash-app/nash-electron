@@ -6,7 +6,13 @@ export interface ChatMessage {
   content: string;
   timestamp: Date;
   isStreaming?: boolean;
+  isError?: boolean;
   isToolResult?: boolean;
+  isHidden?: boolean;
+  toolResult?: {
+    toolName: string;
+    result: string;
+  };
   processingTool?: {
     name: string;
     status: "preparing" | "calling" | "completed";
@@ -19,11 +25,10 @@ export interface ChatProps {
   onNavigate: (step: SetupStep) => void;
 }
 
-export interface FunctionCall {
-  function: {
-    name: string;
-    arguments: Record<string, any>;
-  };
+// Python-style tool call for compatibility with python server
+export interface ToolCall {
+  tool_name: string;
+  arguments: Record<string, any>;
 }
 
 export interface ModelConfig {
@@ -45,4 +50,25 @@ export interface ConfigAlert {
     text: string;
     step: SetupStep;
   };
+}
+
+// Response from local server for summarizing conversations
+export interface SummarizeResponse {
+  success: boolean;
+  summary?: string;
+  session_id?: string;
+  error?: string;
+  token_reduction?: {
+    before: number;
+    after: number;
+  };
+}
+
+interface ProcessingTool {
+  name: string;
+  displayName?: string;
+  status: "preparing" | "calling" | "completed";
+  response?: string;
+  functionCall?: string;
+  toolCallId?: string;
 }
