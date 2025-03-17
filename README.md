@@ -38,64 +38,61 @@ npm run make
 yarn make
 ```
 
-### Publishing Updates
+## Releases
 
-The app uses Electron's auto-update feature with GitHub releases as the update source. When you publish a new version, users will automatically receive the update.
+Nash uses GitHub releases for distribution and automatic updates. When you publish a new release, users will automatically receive update notifications.
 
-#### Publishing a New Release
+### Setting Up for Publishing
 
-1. Update the version in `package.json`
-2. Set up your GitHub token:
+1. **Create a GitHub token** with `repo` scope:
 
-   ```bash
-   # Add to your .env file
-   GITHUB_TOKEN=your_token_here
+   - Go to GitHub → Settings → Developer Settings → Personal Access Tokens
+   - Create a token with "repo" permissions
+   - Copy the token value
 
-   # Or export to environment
-   export GITHUB_TOKEN=your_token_here
-   ```
+2. **Add the token to your environment**:
+   - Create or update `.env` file in the project root:
+     ```
+     GITHUB_TOKEN=your_token_here
+     ```
+   - ⚠️ Never commit this file to Git!
 
-3. Run the publish command:
-   ```bash
-   npm run publish
-   ```
+### Publishing Commands
 
-This will:
+| Command                        | Description                                  |
+| ------------------------------ | -------------------------------------------- |
+| `npm run publish`              | Create a draft release on GitHub             |
+| `npm run publish-test`         | Bump patch version and create a test release |
+| `npm run prerelease-check`     | Dry-run to validate publishing works         |
+| `npm run enable-draft-updates` | Enable testing with draft releases           |
 
-- Create a new GitHub release with the version from `package.json`
-- Upload the built app for all platforms
-- Create a draft release (can be published when ready)
+### Publishing Workflow
 
-#### Testing Updates
+#### Standard Release Process
 
-To test the update process before publishing:
+1. Make sure your changes are committed and the version in `package.json` is correct
+2. Run `npm run publish`
+3. Go to GitHub releases, review the draft, and publish when ready
 
-1. Enable draft release testing:
+#### Testing Updates Locally
 
-   ```bash
-   npm run enable-draft-updates
-   ```
+1. Run `npm run enable-draft-updates` (one-time setup)
+2. Run `npm run publish-test`
+3. This creates a draft release and bumps the patch version
+4. Install the previous version on your test device
+5. The app will detect the update from the draft release
 
-2. Create a test release with a version number higher than current:
+#### Development Notes
 
-   ```bash
-   npm run publish-test
-   ```
+- Updates are managed by `electron-updater` in `src/index.ts`
+- The UI component is in `src/components/UpdateNotification.tsx`
+- Draft releases are only visible to repo collaborators
+- Users will only see published releases
 
-3. Run the app and it will detect the draft release as an update
+### Troubleshooting
 
-4. To check if a publish will work without actually creating a release:
-   ```bash
-   npm run prerelease-check
-   ```
-
-#### Update UI
-
-The app includes a built-in update notification system that shows:
-
-- When updates are available
-- Download progress with speed and percentage
-- When updates are ready to install
-- Any errors during the update process
-
-Users can check for updates manually and choose when to install them.
+- If publish fails, ensure your GitHub token is valid and has repo permissions
+- For testing, ensure `USE_DRAFT_RELEASES=true` is in your `.env` file
+- Check logs at:
+  - macOS: `~/Library/Logs/Nash/main.log`
+  - Windows: `%USERPROFILE%\AppData\Roaming\Nash\logs\main.log`
