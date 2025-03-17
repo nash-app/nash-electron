@@ -1,7 +1,7 @@
 {
   "name": "nash",
   "productName": "Nash",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "My Electron application description",
   "main": ".webpack/main",
   "scripts": {
@@ -11,11 +11,11 @@
     "make": "electron-forge make",
     "premake": "npm rebuild",
     "verify-token": "node scripts/verify-publish.js",
-    "publish": "npm run verify-token && electron-forge publish",
+    "publish": "node scripts/publish-with-env.js",
     "lint": "eslint --ext .ts,.tsx .",
     "enable-draft-updates": "node scripts/enable-draft-updates.js",
-    "publish-test": "npm version patch --no-git-tag-version && npm run verify-token && electron-forge publish",
-    "prerelease-check": "npm run verify-token && electron-forge publish --dry-run"
+    "publish-test": "npm version patch --no-git-tag-version && node scripts/publish-with-env.js",
+    "prerelease-check": "node scripts/publish-with-env.js --dry-run"
   },
   "keywords": [],
   "author": {
