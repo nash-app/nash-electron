@@ -15,6 +15,12 @@ const config: ForgeConfig = {
     asar: true,
     icon: "public/icon",
     extraResource: ["src/install.sh"],
+    osxSign: {},
+    osxNotarize: {
+      appleId: process.env.APPLE_ID!,
+      appleIdPassword: process.env.APPLE_PASSWORD!,
+      teamId: process.env.APPLE_TEAM_ID!,
+    },
   },
   rebuildConfig: {},
   makers: [
