@@ -10,8 +10,12 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "premake": "npm rebuild",
-    "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx ."
+    "verify-token": "node scripts/verify-publish.js",
+    "publish": "npm run verify-token && electron-forge publish",
+    "lint": "eslint --ext .ts,.tsx .",
+    "enable-draft-updates": "node scripts/enable-draft-updates.js",
+    "publish-test": "npm version patch --no-git-tag-version && npm run verify-token && electron-forge publish",
+    "prerelease-check": "npm run verify-token && electron-forge publish --dry-run"
   },
   "keywords": [],
   "author": {
@@ -62,6 +66,8 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^16.4.1",
+    "electron-log": "^5.3.2",
     "electron-squirrel-startup": "^1.0.1",
     "electron-updater": "^6.3.9",
     "lucide-react": "^0.477.0",
@@ -75,6 +81,7 @@
     "sonner": "^2.0.1",
     "tailwind-merge": "^3.0.2",
     "tailwindcss-animate": "^1.0.7",
+    "update-electron-app": "^3.1.1",
     "web-streams-polyfill": "^4.1.0"
   }
 }

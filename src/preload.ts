@@ -1,7 +1,7 @@
 // See the Electron documentation for details on how to use preload scripts:
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
 
 // For TypeScript support
 declare global {
@@ -35,6 +35,14 @@ declare global {
       getTasks: () => Promise<string | null>;
       addTask: (taskId: string, task: any) => Promise<boolean>;
       deleteTask: (taskId: string) => Promise<boolean>;
+      // Update management
+      checkForUpdates: () => Promise<any>;
+      quitAndInstall: () => Promise<void>;
+      onUpdateAvailable: (callback: (info: any) => void) => void;
+      onUpdateDownloaded: (callback: (info: any) => void) => void;
+      onDownloadProgress: (callback: (progressObj: any) => void) => void;
+      onUpdateError: (callback: (message: string) => void) => void;
+      removeAllListeners: () => void;
     };
   }
 }
@@ -124,4 +132,26 @@ contextBridge.exposeInMainWorld("electron", {
   addTask: (taskId: string, task: any) =>
     ipcRenderer.invoke("add-task", taskId, task),
   deleteTask: (taskId: string) => ipcRenderer.invoke("delete-task", taskId),
+
+  // Update management
+  checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+  quitAndInstall: () => ipcRenderer.invoke("quit-and-install"),
+  onUpdateAvailable: (callback: (info: any) => void) => {
+    ipcRenderer.on("update-available", (_, info) => callback(info));
+  },
+  onUpdateDownloaded: (callback: (info: any) => void) => {
+    ipcRenderer.on("update-downloaded", (_, info) => callback(info));
+  },
+  onDownloadProgress: (callback: (progressObj: any) => void) => {
+    ipcRenderer.on("download-progress", (_, progressObj) => callback(progressObj));
+  },
+  onUpdateError: (callback: (message: string) => void) => {
+    ipcRenderer.on("update-error", (_, message) => callback(message));
+  },
+  removeAllListeners: () => {
+    ipcRenderer.removeAllListeners("update-available");
+    ipcRenderer.removeAllListeners("update-downloaded");
+    ipcRenderer.removeAllListeners("download-progress");
+    ipcRenderer.removeAllListeners("update-error");
+  },
 });
