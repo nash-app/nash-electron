@@ -3,6 +3,7 @@ import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,  
 } from "../../../constants";
 import { logMessageHistory, getProviderConfig } from "./utils";
+import { v4 as uuidv4 } from "uuid";
 
 /**
  * Stream completion from the local server
@@ -73,6 +74,8 @@ export const streamCompletion = async (
     }
     
     let partialLine = "";
+    let lastMessageId = "";
+    let pendingToolCallId = ""; // Track tool call message to update when result arrives
     
     // Process the streaming response
     while (true) {
@@ -124,57 +127,131 @@ export const streamCompletion = async (
             onChunk(event.content);
           }
           
-          // Handle tool calls by updating UI, but don't make API requests
+          // Handle tool calls by creating a new message
           if (event.tool_calls && event.tool_calls.length > 0) {
             console.log("[streamCompletion] Received tool call:", event.tool_calls);
             
             const toolCall = event.tool_calls[0];
             
-            // Update UI to show tool call
+            // Create a single message for both the tool call and (later) its result
+            const toolCallId = uuidv4();
+            pendingToolCallId = toolCallId; // Track this ID for updating with tool result
+            
             setMessages(prev => {
-              const newMessages = [...prev];
-              const lastMessage = newMessages[newMessages.length - 1];
+              // Mark the previous assistant message as complete
+              const updatedMessages = prev.map(msg => {
+                if (msg.id === lastMessageId && msg.isStreaming) {
+                  return {
+                    ...msg,
+                    isStreaming: false
+                  };
+                }
+                return msg;
+              });
               
-              if (lastMessage) {
-                lastMessage.processingTool = {
+              // Add a new message for the tool call (will be updated with result later)
+              const toolCallMessage: ChatMessage = {
+                id: toolCallId,
+                role: "assistant",
+                content: "",
+                timestamp: new Date(),
+                processingTool: {
                   name: toolCall.function.name,
-                  status: "completed", // We're not making the actual API call
-                  functionCall: JSON.stringify(toolCall, null, 2),
-                  response: JSON.stringify({ 
-                    message: "Tool execution is handled by the server-side" 
-                  }, null, 2)
-                };
-              }
+                  status: "calling", // Initially mark as calling
+                  functionCall: JSON.stringify(toolCall, null, 2)
+                  // Response will be added when tool result arrives
+                }
+              };
               
-              return newMessages;
+              return [...updatedMessages, toolCallMessage];
             });
+            
+            // Don't update lastMessageId yet - we'll wait for tool result
           }
           
-          // Log other events for debugging
+          // Track when a tool is executing
           if (event.executing_tool) {
             console.log("[streamCompletion] Executing tool:", event.executing_tool);
+            
+            // Update the tool call message to show it's being executed
+            if (pendingToolCallId) {
+              setMessages(prev => {
+                const updatedMessages = prev.map(msg => {
+                  if (msg.id === pendingToolCallId && msg.processingTool) {
+                    const updatedMsg = { ...msg };
+                    if (updatedMsg.processingTool) {
+                      updatedMsg.processingTool = {
+                        ...updatedMsg.processingTool,
+                        status: "calling"
+                      };
+                    }
+                    return updatedMsg;
+                  }
+                  return msg;
+                });
+                
+                return updatedMessages;
+              });
+            }
           }
           
+          // Update the tool call message with the result
           if (event.tool_result) {
             console.log("[streamCompletion] Tool result:", event.tool_result);
             
-            // If we receive a tool result, update the UI to show it
-            if (event.tool_result.name && event.tool_result.content) {
+            if (event.tool_result.name && event.tool_result.content && pendingToolCallId) {
+              // Update the existing tool call message with the result
               setMessages(prev => {
-                const newMessages = [...prev];
-                const lastMessage = newMessages[newMessages.length - 1];
+                const updatedMessages = prev.map(msg => {
+                  if (msg.id === pendingToolCallId && msg.processingTool) {
+                    const updatedMsg = { ...msg };
+                    if (updatedMsg.processingTool) {
+                      updatedMsg.processingTool = {
+                        ...updatedMsg.processingTool,
+                        status: "completed",
+                        response: JSON.stringify(event.tool_result.content, null, 2)
+                      };
+                    }
+                    return updatedMsg;
+                  }
+                  return msg;
+                });
                 
-                if (lastMessage?.processingTool) {
-                  lastMessage.processingTool = {
-                    ...lastMessage.processingTool,
-                    status: "completed",
-                    response: JSON.stringify(event.tool_result.content, null, 2)
-                  };
-                }
-                
-                return newMessages;
+                return updatedMessages;
               });
+              
+              // Reset the pending tool call ID
+              pendingToolCallId = "";
+              
+              // After tool result, prepare for potential follow-up message
+              const followUpMessageId = uuidv4();
+              setMessages(prev => {
+                const followUpMessage: ChatMessage = {
+                  id: followUpMessageId,
+                  role: "assistant",
+                  content: "",
+                  timestamp: new Date(),
+                  isStreaming: true
+                };
+                
+                return [...prev, followUpMessage];
+              });
+              
+              // Update last message ID
+              lastMessageId = followUpMessageId;
             }
+          }
+          
+          // Update lastMessageId for the first message
+          if (event.content && !lastMessageId) {
+            // Find the current streaming message to get its ID
+            setMessages(prev => {
+              const streamingMessage = prev.find(msg => msg.isStreaming);
+              if (streamingMessage) {
+                lastMessageId = streamingMessage.id;
+              }
+              return prev;
+            });
           }
         } catch (error) {
           console.error("[streamCompletion] Error parsing event data:", error, data);
