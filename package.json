@@ -5,12 +5,10 @@
   "description": "My Electron application description",
   "main": ".webpack/main",
   "scripts": {
-    "start": "electron-forge start",
+    "start": "DEBUG=electron-forge:* electron-forge start",
     "start-direct": "webpack --config webpack.direct.config.ts && electron .",
     "package": "electron-forge package",
-    "make": "electron-forge make",
-    "make-dev": "DEBUG=electron-packager electron-forge make",
-    "premake-dev": "npm rebuild",
+    "make": "DEBUG=electron-packager electron-forge make",
     "premake": "npm rebuild",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx ."
