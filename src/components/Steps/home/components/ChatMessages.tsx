@@ -19,6 +19,7 @@ export function ChatMessages({
   expandedTools,
   onToggleToolExpand,
 }: ChatMessagesProps) {
+  console.log('messages', messages);
   // Filter out tool result messages
   const visibleMessages = messages.filter((message) => !message.isToolResult);
 
@@ -55,7 +56,8 @@ export function ChatMessages({
                 />
               ) : (
                 <div className="prose prose-invert max-w-none">
-                  <p>{message.content}</p>
+                  {/* Render user messages as plain text without paragraph wrapping */}
+                  {message.content}
                 </div>
               )}
             </div>

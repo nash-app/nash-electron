@@ -4,6 +4,7 @@ import { memo, useId, useMemo } from "react";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock, CodeBlockCode } from "./code-block";
+import React from "react";
 
 export type MarkdownProps = {
   children: string;
@@ -52,8 +53,25 @@ const INITIAL_COMPONENTS: Partial<Components> = {
     );
   },
   pre: function PreComponent({ children }) {
-    return <>{children}</>;
+    return <div className="my-2">{children}</div>;
   },
+  p: function ParagraphComponent({ children, ...props }) {
+    const hasPreElement = React.Children.toArray(children).some(child => {
+      return (
+        (React.isValidElement(child) && child.type === 'pre') ||
+        (React.isValidElement(child) && 
+          (child.props as any)?.node?.tagName === 'pre') ||
+        (React.isValidElement(child) && typeof child.type === 'function' && 
+         (child.type as any).name === 'CodeComponent')
+      );
+    });
+
+    if (hasPreElement) {
+      return <div {...props}>{children}</div>;
+    }
+
+    return <p {...props}>{children}</p>;
+  }
 };
 
 const MemoizedMarkdownBlock = memo(
@@ -97,7 +115,10 @@ function MarkdownComponent({
         <MemoizedMarkdownBlock
           key={`${blockId}-block-${index}`}
           content={block}
-          components={components}
+          components={{
+            ...INITIAL_COMPONENTS,
+            ...components
+          }}
           className={className}
         />
       ))}
