@@ -10,6 +10,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "make-dev": "DEBUG=electron-packager electron-forge make",
+    "premake-dev": "npm rebuild",
     "premake": "npm rebuild",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx ."
