@@ -1,3 +1,5 @@
+// import "dotenv/config"
+import path from "path";
 import type { ForgeConfig } from "@electron-forge/shared-types";
 import { MakerSquirrel } from "@electron-forge/maker-squirrel";
 import { MakerZIP } from "@electron-forge/maker-zip";
@@ -10,11 +12,24 @@ import { WebpackPlugin } from "@electron-forge/plugin-webpack";
 import { mainConfig } from "./webpack.main.config";
 import { rendererConfig } from "./webpack.renderer.config";
 
+console.log(process.env.APPLE_ID);
+console.log(process.env.APPLE_PASSWORD);
+console.log(process.env.APPLE_TEAM_ID);
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     icon: "public/icon",
-    extraResource: ["src/install.sh"],
+    extraResource: [
+      "src/install.sh",
+      path.resolve(__dirname, ".env"),
+    ],
+    osxSign: {},
+    osxNotarize: {
+      appleId: process.env.APPLE_ID!,
+      appleIdPassword: process.env.APPLE_PASSWORD!,
+      teamId: process.env.APPLE_TEAM_ID!,
+    },
   },
   rebuildConfig: {},
   makers: [
