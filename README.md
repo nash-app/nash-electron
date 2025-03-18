@@ -82,6 +82,42 @@ Nash uses GitHub releases for distribution and automatic updates. When you publi
 4. Install the previous version on your test device
 5. The app will detect the update from the draft release
 
+#### Update Behavior
+
+The app automatically checks for updates:
+
+- When the app starts
+- Every hour in the background
+
+The update UI will only appear when:
+
+- An update is available (showing "Update Now" button)
+- An update is downloading (showing progress bar)
+- An update is ready to install (showing "Restart & Install" button)
+- An error occurs (showing error message)
+
+No UI is shown when there are no updates available, keeping the interface clean.
+
+#### Testing the Update UI
+
+There are two ways to test the update UI:
+
+1. **With an actual release:**
+
+   - Enable draft updates: `npm run enable-draft-updates`
+   - Create a test release: `npm run publish-test`
+   - Run the app: `npm start`
+   - The app will automatically check for updates
+
+2. **Using development tools (no actual release needed):**
+   - Run the app: `npm start`
+   - Press `Alt+Shift+U` to show the UI testing panel
+   - Use the buttons to simulate different update states:
+     - "Available" - Shows the update available notification
+     - "Downloading" - Shows the download progress bar
+     - "Downloaded" - Shows the update ready notification
+     - "Error" - Shows the error notification
+
 #### Development Notes
 
 - Updates are managed by `electron-updater` in `src/index.ts`

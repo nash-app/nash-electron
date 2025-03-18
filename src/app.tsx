@@ -10,6 +10,7 @@ import { Home } from "./components/Steps/Home";
 import { Models } from "./components/Steps/Models";
 import { SetupStep } from "./components/types";
 import { DragHandle } from "./components/DragHandle";
+import UpdateNotification from "./components/UpdateNotification";
 
 const App: React.FC = () => {
   const [hasInstalledNash, setHasInstalledNash] = React.useState(false);
@@ -114,6 +115,7 @@ const App: React.FC = () => {
     >
       <DragHandle />
       <div className="flex-1 overflow-auto">{renderStep()}</div>
+      <UpdateNotification />
     </div>
   );
 };
