@@ -35,27 +35,3 @@ export const getProviderConfig = async (modelId: string) => {
   };
 };
 
-export const logMessageHistory = (messages: ChatMessage[], context: string) => {
-  console.log("\n");
-  console.log("🔍 ================================");
-  console.log(`📝 MESSAGE HISTORY [${context}]`);
-  console.log("================================");
-  console.log("Total messages:", messages.length);
-  messages.forEach((msg, i) => {
-    console.log("\n-------------------");
-    console.log(`📨 Message ${i + 1}:`);
-    console.log("👤 Role:", msg.role);
-    console.log("🆔 ID:", msg.id);
-    console.log("📄 Content:", msg.content);
-    console.log("🔄 Is Streaming:", msg.isStreaming);
-    if (msg.processingTool) {
-      console.log("🛠  Tool:", {
-        name: msg.processingTool.name,
-        status: msg.processingTool.status,
-        functionCall: msg.processingTool.functionCall,
-        response: msg.processingTool.response,
-      });
-    }
-  });
-  console.log("\n================================\n");
-};

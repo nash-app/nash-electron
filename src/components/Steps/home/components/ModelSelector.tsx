@@ -106,7 +106,7 @@ export function ModelSelector({
             </SelectItem>
           ))}
         </SelectGroup>
-        <SelectGroup>
+        {/* <SelectGroup>
           <SelectLabel className="flex items-center justify-between pr-2">
             <div className="flex items-center gap-2">
               <div className="bg-white rounded-md w-5 h-5 flex items-center justify-center overflow-hidden">
@@ -173,7 +173,7 @@ export function ModelSelector({
               </div>
             </SelectItem>
           ))}
-        </SelectGroup>
+        </SelectGroup> */}
       </SelectContent>
     </Select>
   );

@@ -28,15 +28,15 @@ interface ApiSection {
 
 export function Models({ onNavigate }: ModelsProps): React.ReactElement {
   const [sections, setSections] = React.useState<ApiSection[]>([
-    {
-      name: "OpenAI",
-      inputValue: "",
-      image: openAIIcon,
-      baseUrl: "",
-      savedBaseUrl: "",
-      isEditingBaseUrl: false,
-      isBaseUrlExpanded: false,
-    },
+    // {
+    //   name: "OpenAI",
+    //   inputValue: "",
+    //   image: openAIIcon,
+    //   baseUrl: "",
+    //   savedBaseUrl: "",
+    //   isEditingBaseUrl: false,
+    //   isBaseUrlExpanded: false,
+    // },
     {
       name: "Anthropic",
       inputValue: "",

@@ -16,6 +16,6 @@ export const TERMS_OF_SERVICE_URL = "https://1mcp.ai/terms-of-service.md";
 
 export const FUNCTION_CALL_MARKER = "<f";
 
-export const NASH_LOCAL_SERVER_VERSION = "0.1.3";
+export const NASH_LOCAL_SERVER_VERSION = "0.1.5";
 export const NASH_LOCAL_SERVER_PATH = `~/Library/Application\\ Support/Nash/nash-local-server-${NASH_LOCAL_SERVER_VERSION}`;
 export const NASH_LOCAL_SERVER_RUN_COMMAND = `cd ${NASH_LOCAL_SERVER_PATH} && .venv/bin/poetry run llm_server`;

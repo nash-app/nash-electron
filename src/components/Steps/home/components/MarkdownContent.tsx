@@ -103,6 +103,20 @@ export function MarkdownContent({ content, className }: MarkdownContentProps) {
       // are rendered outside of paragraph tags
       return <div className="my-2">{children}</div>;
     },
+    // Override paragraph component to prevent p > pre issues
+    p: ({ children, ...props }: any) => {
+      // Check if children contains a pre element
+      const containsPre = React.Children.toArray(children).some(
+        (child) => React.isValidElement(child) && child.type === 'pre'
+      );
+
+      // If it contains a pre element, render as a div instead of p
+      if (containsPre) {
+        return <div {...props}>{children}</div>;
+      }
+
+      return <p {...props}>{children}</p>;
+    },
   };
   
   return (
