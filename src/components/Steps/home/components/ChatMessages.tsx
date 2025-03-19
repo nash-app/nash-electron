@@ -19,52 +19,21 @@ export function ChatMessages({
   expandedTools,
   onToggleToolExpand,
 }: ChatMessagesProps) {
-  console.log('messages', messages);
-  // Filter out tool result messages
-  const visibleMessages = messages.filter((message) => !message.isToolResult);
+  
 
   return (
     <>
-      {visibleMessages.map((message) => (
+      {messages.map((message) => (
         <div key={message.id} className="flex flex-col gap-2">
-          <Message>
-            <Avatar className="h-[44px] w-[44px] rounded-lg">
-              {message.role === "assistant" ? (
-                <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
-                  <img src={nashLogoWhite} alt="Nash" className="w-5 h-5" />
-                </div>
-              ) : (
-                <div className="w-full h-full bg-zinc-700 flex items-center justify-center">
-                  <User className="w-5 h-5 text-white" />
-                </div>
-              )}
-            </Avatar>
-            <div
-              className={cn(
-                "rounded-lg px-3 py-2 break-words max-w-max",
-                message.role === "user"
-                  ? "bg-zinc-700 text-white"
-                  : "bg-zinc-900 text-zinc-100"
-              )}
-            >
-              {message.role === "assistant" && message.isStreaming && !message.content ? (
-                <span className="text-zinc-400">Thinking...</span>
-              ) : message.role === "assistant" && message.content ? (
-                <MarkdownContent 
-                  content={message.content} 
-                  className="prose prose-invert max-w-none" 
-                />
-              ) : (
-                <div className="prose prose-invert max-w-none">
-                  {/* Render user messages as plain text without paragraph wrapping */}
-                  {message.content}
-                </div>
-              )}
-            </div>
-          </Message>
+          {/* Tool Badge */}
           {message.processingTool && (
-            <div className="flex flex-col gap-2 pl-14">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+               <Avatar className="h-[44px] w-[44px] rounded-lg"> 
+                   <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
+                      <img src={nashLogoWhite} alt="Nash" className="w-5 h-5" />
+                    </div>
+                </Avatar>
                 <Badge
                   variant="secondary"
                   className={cn(
@@ -98,7 +67,7 @@ export function ChatMessages({
               </div>
               {expandedTools[message.id] &&
                 message.processingTool.functionCall && (
-                  <div className="flex flex-col gap-3 bg-zinc-800/50 border border-zinc-700/50 p-4 rounded-lg overflow-x-auto">
+                  <div className="flex flex-col gap-3 bg-zinc-800/50 border border-zinc-700/50 p-4 rounded-lg overflow-x-auto ml-14">
                     <div className="flex flex-col gap-2">
                       <div className="text-sm text-purple-300 font-medium flex items-center gap-2">
                         <svg
@@ -149,6 +118,45 @@ export function ChatMessages({
                 )}
             </div>
           )}
+
+          {/* Message with background */}
+          <Message>
+            <Avatar className="h-[44px] w-[44px] rounded-lg">
+              {message.role === "assistant" ? (
+                <div className="w-full h-full bg-zinc-900 flex items-center justify-center">
+                  <img src={nashLogoWhite} alt="Nash" className="w-5 h-5" />
+                </div>
+              ) : (
+                <div className="w-full h-full bg-zinc-700 flex items-center justify-center">
+                  <User className="w-5 h-5 text-white" />
+                </div>
+              )}
+            </Avatar>
+            <div
+              className={cn(
+                "rounded-lg px-3 py-2 break-words max-w-max",
+                message.role === "user"
+                  ? "bg-zinc-700 text-white"
+                  : "bg-zinc-900 text-zinc-100"
+              )}
+            >
+              {message.role === "assistant" && message.isStreaming && !message.content ? (
+                <span className="text-zinc-400">Thinking...</span>
+              ) : message.role === "assistant" && message.content ? (
+                <MarkdownContent 
+                  content={message.content} 
+                  className="prose prose-invert max-w-none" 
+                />
+              ) : (
+                <div className="prose prose-invert max-w-none">
+                  {/* Render user messages as plain text without paragraph wrapping */}
+                  {message.content}
+                </div>
+              )}
+            </div>
+          </Message>
+
+        
         </div>
       ))}
     </>

@@ -46,11 +46,6 @@ export const streamCompletion = async (
       Object.assign(payload, { session_id: sessionId });
     }
 
-    console.log("[streamCompletion] Sending request to server with payload:", {
-      ...payload,
-      api_key: "[REDACTED]", // Don't log API key
-    });
-
     // Make the request to the server
     const response = await fetch(NASH_LOCAL_SERVER_CHAT_ENDPOINT, {
       method: "POST",
@@ -75,17 +70,21 @@ export const streamCompletion = async (
     let lastMessageId = "";
     let pendingToolCallId = "";
     let fullRawResponse = ""; // Track complete raw response
+    
+    // Track current tool call being built across chunks
+    let currentToolCall: {
+      id: string | null;
+      function: {
+        name: string | null;
+        arguments: string;
+      };
+    } | null = null;
 
     // Process the streaming response
     while (true) {
       const { done, value } = await reader.read();
 
       if (done) {
-        console.log("[streamCompletion] Stream complete");
-        console.log(
-          "[streamCompletion] Full raw server response:",
-          fullRawResponse
-        );
         break;
       }
 
@@ -104,7 +103,6 @@ export const streamCompletion = async (
 
         // Check for the end of stream marker
         if (data === "[DONE]") {
-          console.log("[streamCompletion] Received [DONE] marker");
           // Update UI to reflect end of streaming
           setMessages((prev) => {
             const newMessages = [...prev];
@@ -122,10 +120,6 @@ export const streamCompletion = async (
 
           // Check for session ID
           if (event.session_id) {
-            console.log(
-              "[streamCompletion] Received session ID:",
-              event.session_id
-            );
             onChunk("", event.session_id);
           }
 
@@ -134,58 +128,91 @@ export const streamCompletion = async (
             onChunk(event.content);
           }
 
-          // Handle tool calls by creating a new message
+          // Handle tool calls by creating a new message or updating existing one
           if (event.tool_calls && event.tool_calls.length > 0) {
-            console.log(
-              "[streamCompletion] Received tool call:",
-              event.tool_calls
-            );
-
-            const toolCall = event.tool_calls[0];
-
-            // Create a single message for both the tool call and (later) its result
-            const toolCallId = uuidv4();
-            pendingToolCallId = toolCallId; // Track this ID for updating with tool result
-
-            setMessages((prev) => {
-              // Mark the previous assistant message as complete
-              const updatedMessages = prev.map((msg) => {
-                if (msg.id === lastMessageId && msg.isStreaming) {
-                  return {
-                    ...msg,
-                    isStreaming: false,
-                  };
+            const toolCallChunk = event.tool_calls[0];
+            
+            // First tool call chunk with complete ID and name
+            if (toolCallChunk.id && toolCallChunk.function.name) {
+              currentToolCall = {
+                id: toolCallChunk.id,
+                function: {
+                  name: toolCallChunk.function.name,
+                  arguments: toolCallChunk.function.arguments || ""
                 }
-                return msg;
-              });
-
-              // Add a new message for the tool call (will be updated with result later)
-              const toolCallMessage: ChatMessage = {
-                id: toolCallId,
-                role: "assistant",
-                content: "",
-                timestamp: new Date(),
-                processingTool: {
-                  name: toolCall.function.name,
-                  status: "calling", // Initially mark as calling
-                  functionCall: JSON.stringify(toolCall, null, 2),
-                  // Response will be added when tool result arrives
-                },
               };
+              
+              // Create a new message for this tool call
+              const toolCallId = uuidv4();
+              pendingToolCallId = toolCallId;
+              
+              setMessages((prev) => {
+                // Mark the previous assistant message as complete
+                const updatedMessages = prev.map((msg) => {
+                  if (msg.id === lastMessageId && msg.isStreaming) {
+                    return {
+                      ...msg,
+                      isStreaming: false,
+                    };
+                  }
+                  return msg;
+                });
 
-              return [...updatedMessages, toolCallMessage];
-            });
+                // Add a new message for the tool call
+                const toolCallMessage: ChatMessage = {
+                  id: toolCallId,
+                  role: "assistant",
+                  content: "",
+                  timestamp: new Date(),
+                  processingTool: {
+                    name: currentToolCall?.function.name || "",
+                    status: "calling",
+                    functionCall: JSON.stringify({
+                      id: currentToolCall?.id,
+                      function: {
+                        name: currentToolCall?.function.name,
+                        arguments: currentToolCall?.function.arguments
+                      }
+                    }, null, 2),
+                  },
+                };
 
-            // Don't update lastMessageId yet - we'll wait for tool result
+                return [...updatedMessages, toolCallMessage];
+              });
+            } 
+            // Continuation chunks with additional argument data
+            else if (currentToolCall && toolCallChunk.function.arguments) {
+              // Update the arguments for the current tool call
+              currentToolCall.function.arguments += toolCallChunk.function.arguments;
+              
+              // Update the existing tool call message
+              if (pendingToolCallId) {
+                setMessages((prev) => {
+                  return prev.map((msg) => {
+                    if (msg.id === pendingToolCallId && msg.processingTool) {
+                      return {
+                        ...msg,
+                        processingTool: {
+                          ...msg.processingTool,
+                          functionCall: JSON.stringify({
+                            id: currentToolCall?.id,
+                            function: {
+                              name: currentToolCall?.function.name,
+                              arguments: currentToolCall?.function.arguments
+                            }
+                          }, null, 2),
+                        }
+                      };
+                    }
+                    return msg;
+                  });
+                });
+              }
+            }
           }
 
           // Track when a tool is executing
           if (event.executing_tool) {
-            console.log(
-              "[streamCompletion] Executing tool:",
-              event.executing_tool
-            );
-
             // Update the tool call message to show it's being executed
             if (pendingToolCallId) {
               setMessages((prev) => {
@@ -210,8 +237,6 @@ export const streamCompletion = async (
 
           // Update the tool call message with the result
           if (event.tool_result) {
-            console.log("[streamCompletion] Tool result:", event.tool_result);
-
             if (
               event.tool_result.name &&
               event.tool_result.content &&
@@ -241,8 +266,9 @@ export const streamCompletion = async (
                 return updatedMessages;
               });
 
-              // Reset the pending tool call ID
+              // Reset tracking variables
               pendingToolCallId = "";
+              currentToolCall = null;
 
               // After tool result, prepare for potential follow-up message
               const followUpMessageId = uuidv4();
@@ -285,7 +311,6 @@ export const streamCompletion = async (
     }
   } catch (error) {
     console.error("[streamCompletion] Stream error:", error);
-
     // Rethrow the error unless it's an abort error that was already handled
     if (error instanceof Error && error.name === "AbortError") {
       console.log("[streamCompletion] Request was aborted");
