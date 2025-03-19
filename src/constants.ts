@@ -1,5 +1,5 @@
 export const NASH_MCP_SERVER_VERSION = "0.1.9";
-export const NASH_LOCAL_SERVER_VERSION = "0.1.6";
+export const NASH_LOCAL_SERVER_VERSION = "0.1.7";
 export const NASH_MCP_DIR = `nash-mcp-${NASH_MCP_SERVER_VERSION}`;
 
 // Installation commands
