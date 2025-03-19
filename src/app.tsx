@@ -6,8 +6,9 @@ import { InstallStep } from "./components/Steps/InstallStep";
 import { ServicesStep } from "./components/Steps/ServicesStep";
 import { SecretsStep } from "./components/Steps/SecretsStep";
 import { TaskPage } from "./components/Steps/TaskPage";
-import { Home } from "./components/Steps/Home";
+import { Home } from "./components/Steps/home/Home";
 import { Models } from "./components/Steps/Models";
+import { Tools } from "./components/Steps/Tools";
 import { SetupStep } from "./components/types";
 import { DragHandle } from "./components/DragHandle";
 
@@ -46,7 +47,7 @@ const App: React.FC = () => {
         setServices(updatedServices);
         // Navigate to home if this is the first service added
         if (!updatedServices.some((s) => s.added)) {
-          setCurrentStep(SetupStep.Tasks);
+          setCurrentStep(SetupStep.Home);
         }
       } else {
         console.error("Failed to configure MCP server");
@@ -96,14 +97,17 @@ const App: React.FC = () => {
       case SetupStep.Tasks:
         return <TaskPage onNavigate={handleNavigate} />;
 
-      // case SetupStep.Home:
-      //   return <Home onNavigate={handleNavigate} />;
+      case SetupStep.Home:
+        return <Home onNavigate={handleNavigate} />;
 
-      // case SetupStep.Models:
-      //   return <Models onNavigate={handleNavigate} />;
+      case SetupStep.Models:
+        return <Models onNavigate={handleNavigate} />;
+
+      case SetupStep.Tools:
+        return <Tools onNavigate={handleNavigate} />;
 
       default:
-        return <TaskPage onNavigate={handleNavigate} />;
+        return <Home onNavigate={handleNavigate} />;
     }
   };
 
