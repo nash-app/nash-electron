@@ -1,6 +1,6 @@
 import { ChatMessage } from "./types";
 import { NASH_LOCAL_SERVER_CHAT_ENDPOINT } from "../../../constants";
-import { logMessageHistory, getProviderConfig } from "./utils";
+import {  getProviderConfig } from "./utils";
 import { v4 as uuidv4 } from "uuid";
 
 /**
@@ -21,8 +21,6 @@ export const streamCompletion = async (
   setMessages: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void
 ) => {
   try {
-    logMessageHistory(messages, "streamCompletion - start");
-
     // Get provider configuration for the selected model
     const providerConfig = await getProviderConfig(modelId);
 

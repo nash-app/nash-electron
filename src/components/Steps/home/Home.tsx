@@ -158,37 +158,25 @@ const useChatInteraction = (
 ) => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentContentRef = useRef("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleStop = useCallback(() => {
     if (abortControllerRef.current) {
-      console.log("[handleStop] Aborting current stream");
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      
-      // Ensure the UI is updated to reflect the abort
-      chatState.updateLastMessage((msg) => ({
-        ...msg,
-        isStreaming: false,
-      }));
+      setIsSubmitting(false);
     }
-    
-    console.log("[handleStop] Stream aborted and state reset");
-  }, [chatState]);
+  }, []);
 
   const handleSubmit = useCallback(
     async (input: string) => {
       if (!input.trim() || !selectedModel) {
-        console.log("[handleSubmit] Submission blocked:", {
-          hasInput: !!input.trim(),
-          hasModel: !!selectedModel,
-        });
         return;
       }
 
-      console.log(
-        "[handleSubmit] Starting submission with model:",
-        selectedModel
-      );
+      setIsSubmitting(true);
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
 
       const userMessage: ChatMessage = {
         id: uuidv4(),
@@ -209,10 +197,6 @@ const useChatInteraction = (
       chatState.addMessage(assistantMessage);
       currentContentRef.current = "";
 
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      console.log("[handleSubmit] Created new AbortController");
-
       try {
         await streamCompletion(
           [...chatState.messages, userMessage, assistantMessage],
@@ -232,8 +216,6 @@ const useChatInteraction = (
           chatState.setMessages
         );
       } catch (error) {
-        console.error("[handleSubmit] Error in chat stream:", error);
-
         if (error instanceof Error && error.name !== "AbortError") {
           chatState.updateLastMessage((msg) => ({
             ...msg,
@@ -245,20 +227,19 @@ const useChatInteraction = (
             ...msg,
             isStreaming: false,
           }));
-          console.log("[handleSubmit] Request was aborted");
         }
       } finally {
         abortControllerRef.current = null;
+        setIsSubmitting(false);
       }
     },
     [selectedModel, chatState]
   );
 
-
   return {
     handleSubmit,
     handleStop,
-    isSubmitting: !!abortControllerRef.current,
+    isSubmitting,
   };
 };
 
@@ -278,35 +259,20 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Load configured providers on mount
   useEffect(() => {
     const loadConfiguredProviders = async () => {
-      console.log(
-        "[loadConfiguredProviders] Loading provider configurations..."
-      );
       try {
         const keys = await window.electron.getKeys();
         const providers = new Set(keys.map((k) => k.provider));
-        console.log(
-          "[loadConfiguredProviders] Found providers:",
-          Array.from(providers)
-        );
         setConfiguredProviders(providers);
 
         if (!selectedModel) {
-          console.log(
-            "[loadConfiguredProviders] No model selected, selecting default..."
-          );
           if (providers.has("anthropic")) {
-            console.log(
-              "[loadConfiguredProviders] Setting default to Claude 3.7"
-            );
             setSelectedModel("claude-3-7-sonnet-latest");
           } else if (providers.has("openai")) {
-            console.log("[loadConfiguredProviders] Setting default to O3 Mini");
             setSelectedModel("o3-mini");
           }
         }
 
-        if (providers.size === 0) {
-          console.log("[loadConfiguredProviders] No providers configured");
+        if (providers.size === 0) { 
           setConfigAlerts([
             {
               type: "error",
@@ -334,19 +300,10 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   // Monitor selected model changes
   useEffect(() => {
     if (selectedModel) {
-      console.log("[modelChangeMonitor] Model changed to:", selectedModel);
       const model = ALL_MODELS.find((m) => m.id === selectedModel);
       if (model) {
         const provider = model.provider;
-        console.log(
-          "[modelChangeMonitor] Checking provider configuration:",
-          provider
-        );
         if (!configuredProviders.has(provider)) {
-          console.log(
-            "[modelChangeMonitor] Provider not configured:",
-            provider
-          );
           setConfigAlerts([
             {
               type: "error",
@@ -360,10 +317,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
             },
           ]);
         } else {
-          console.log(
-            "[modelChangeMonitor] Provider properly configured:",
-            provider
-          );
           setConfigAlerts([]);
         }
       }
