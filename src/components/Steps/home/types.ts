@@ -38,10 +38,17 @@ export interface ProviderModel {
 }
 
 export interface ConfigAlert {
-  type: "error" | "warning";
+  type: "error";
   message: string;
   link?: {
     text: string;
     step: SetupStep;
+  };
+  id?: string;
+  dismissible?: boolean;
+  timeout?: number;
+  action?: {
+    text: string;
+    onClick: () => void;
   };
 }
