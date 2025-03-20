@@ -26,7 +26,6 @@ import { ChatContainer } from "../../ui/chat-container";
 import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,
   NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
-  NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
 } from "../../../constants";
 import {
   Select,
