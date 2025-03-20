@@ -219,6 +219,8 @@ NASH_BASE_PATH=${NASH_DIR}
 NASH_SECRETS_PATH=${NASH_DIR}/secrets.json
 NASH_TASKS_PATH=${NASH_DIR}/tasks.json
 NASH_LOGS_PATH=${NASH_DIR}/logs
+NASH_MODELS_PATH=${NASH_DIR}/models
+NASH_SESSIONS_PATH=${NASH_DIR}/sessions
 EOL
 chmod 644 "$ENV_FILE"  # User can read/write, others can read
 success "Created environment file: $ENV_FILE"
