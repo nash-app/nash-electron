@@ -20,8 +20,7 @@ export interface StreamSnapshot {
   new_raw_llm_messages: LLMMessage[] | null;
 }
 
-// setMessagesForUi 
-// setMessagesForServer 
+
 
 export interface NashLLMMessage extends LLMMessage {
   timestamp: Date;

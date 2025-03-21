@@ -25,12 +25,12 @@ function buildSnapshot(snapshot, chunk, chatLifecycleState) {
 
 ```ts
 function updateChatLifecycleState(chatLifecycleState, chunk) {
-    if (chatLifecycleState.justGotToolName = true) {
-        if chunk.tool_args = null) {
-            chatLifecycleState.justGotToolName = false;
-            chatLifecycleState.justGotToolArgs = true;
-        }
+  if ((chatLifecycleState.justGotToolName = true)) {
+    if ((chunk.tool_args = null)) {
+      chatLifecycleState.justGotToolName = false;
+      chatLifecycleState.justGotToolArgs = true;
     }
-    return chatLifecycleState;
+  }
+  return chatLifecycleState;
 }
 ```
