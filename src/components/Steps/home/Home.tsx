@@ -26,7 +26,6 @@ import { ChatContainer } from "../../ui/chat-container";
 import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,
   NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
-  NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
 } from "../../../constants";
 import {
   Select,
@@ -154,7 +153,8 @@ const useChatState = () => {
 // Custom hook for managing chat interactions
 const useChatInteraction = (
   selectedModel: string,
-  chatState: ReturnType<typeof useChatState>
+  chatState: ReturnType<typeof useChatState>,
+  onError: (message: string) => void
 ) => {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentContentRef = useRef("");
@@ -222,6 +222,8 @@ const useChatInteraction = (
             content: "Sorry, there was an error processing your request.",
             isStreaming: false,
           }));
+          
+          onError(error instanceof Error ? error.message : "An unexpected error occurred");
         } else {
           chatState.updateLastMessage((msg) => ({
             ...msg,
@@ -233,7 +235,7 @@ const useChatInteraction = (
         setIsSubmitting(false);
       }
     },
-    [selectedModel, chatState]
+    [selectedModel, chatState, onError]
   );
 
   return {
@@ -246,6 +248,7 @@ const useChatInteraction = (
 export function Home({ onNavigate }: ChatProps): React.ReactElement {
   const [input, setInput] = useState("");
   const [configAlerts, setConfigAlerts] = useState<ConfigAlert[]>([]);
+  const [generalErrors, setGeneralErrors] = useState<ConfigAlert[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [configuredProviders, setConfiguredProviders] = useState<Set<string>>(
     new Set()
@@ -253,8 +256,37 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   const chatState = useChatState();
-  const { handleSubmit, handleStop, isSubmitting } =
-    useChatInteraction(selectedModel, chatState);
+  
+  // Handle dismissing general errors
+  const handleDismissError = (id: string) => {
+    setGeneralErrors((prev) => prev.filter((error) => error.id !== id));
+  };
+
+  // Add a function to handle errors from chat interactions
+  const addGeneralError = (message: string) => {
+    const id = uuidv4();
+    
+    // Check if it's a critical error like connection issues
+    const isCriticalError = message.includes("Connection error");
+    
+    setGeneralErrors((prev) => [
+      ...prev,
+      {
+        id,
+        type: "error",
+        message,
+        dismissible: true,
+        // Only auto-dismiss non-critical errors
+        timeout: isCriticalError ? undefined : 8000,
+      },
+    ]);
+  };
+  
+  const { handleSubmit, handleStop, isSubmitting } = useChatInteraction(
+    selectedModel, 
+    chatState,
+    addGeneralError
+  );
 
   // Load configured providers on mount
   useEffect(() => {
@@ -328,6 +360,7 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       <Header onNavigate={onNavigate} currentStep={SetupStep.Home} />
 
       <ConfigAlerts alerts={configAlerts} onNavigate={onNavigate} />
+      <ConfigAlerts alerts={generalErrors} onNavigate={onNavigate} onDismiss={handleDismissError} />
 
       <div className="flex-1 flex flex-col overflow-hidden">
         <ChatContainer

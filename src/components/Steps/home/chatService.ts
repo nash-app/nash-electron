@@ -56,7 +56,20 @@ export const streamCompletion = async (
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Server error: ${response.status} - ${errorText}`);
+      let errorMessage = `Server error: ${response.status}`;
+      
+      // Try to parse error text as JSON to extract more useful message
+      try {
+        const errorData = JSON.parse(errorText);
+        if (errorData.error || errorData.message) {
+          errorMessage = errorData.error || errorData.message;
+        }
+      } catch (e) {
+        // If not valid JSON, use the raw error text (but only first part for readability)
+        errorMessage = errorText.length > 150 ? `${errorText.substring(0, 150)}...` : errorText;
+      }
+      
+      throw new Error(errorMessage);
     }
 
     const reader = response.body?.getReader();
@@ -313,7 +326,18 @@ export const streamCompletion = async (
     if (error instanceof Error && error.name === "AbortError") {
       console.log("[streamCompletion] Request was aborted");
     } else {
-      throw error;
+      // Format error for display - make sure we aren't passing raw error objects
+      let errorMessage = "An unexpected error occurred";
+      
+      if (error instanceof TypeError && error.message === "Failed to fetch") {
+        // Handle connection errors more descriptively
+        errorMessage = "Connection error: The server is not running or cannot be reached. Please check if the local server is running.";
+      } else if (error instanceof Error) {
+        // For other errors, use the original message
+        errorMessage = error.message;
+      }
+      
+      throw new Error(errorMessage);
     }
   }
 };
