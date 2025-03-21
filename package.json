@@ -6,6 +6,7 @@
   "main": ".webpack/main",
   "scripts": {
     "start": "DEBUG=electron-forge:* electron-forge start",
+    "start:dev": "NASH_DEV_MODE=1 electron-forge start",
     "start-direct": "webpack --config webpack.direct.config.ts && electron .",
     "package": "electron-forge package",
     "make": "DEBUG=electron-packager electron-forge make",
