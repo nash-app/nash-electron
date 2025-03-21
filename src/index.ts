@@ -257,6 +257,14 @@ function checkInstalledServices() {
         return config.mcpServers?.Nash !== undefined;
       },
     },
+    {
+      name: "Cursor",
+      path: path.join(os.homedir(), ".cursor"),
+      configCheck: async () => {
+        const config = readConfig("cursor");
+        return config.mcpServers?.Nash !== undefined;
+      },
+    },
   ];
 
   return Promise.all(
@@ -365,14 +373,10 @@ async function configureMcpServer(clientName: string): Promise<boolean> {
 // Function to check if Cursor is installed
 function checkCursorInstalled() {
   try {
-    const cursorPath = path.join(
-      os.homedir(),
-      "Library",
-      "Application Support",
-      "Cursor"
-    );
+    const cursorPath = path.join(os.homedir(), ".cursor");
     return fs.existsSync(cursorPath);
   } catch (error) {
+    console.error("Error checking Cursor installation:", error);
     return false;
   }
 }
@@ -893,6 +897,17 @@ app.whenReady().then(() => {
     }
   });
 
+  // Add terms and conditions handler
+  ipcMain.handle("fetch-terms", async () => {
+    try {
+      const terms = await fetchTermsAndConditions();
+      return terms;
+    } catch (error) {
+      console.error("Error fetching terms:", error);
+      throw error;
+    }
+  });
+
   // Register secrets management handlers
   ipcMain.handle("get-secrets", async () => {
     return await readSecrets();
@@ -935,38 +950,6 @@ app.whenReady().then(() => {
     return await deleteKey(provider);
   });
 
-  ipcMain.handle("configure-mcp", async (_, serviceName) => {
-    const normalizedServiceName = serviceName.toLowerCase();
-
-    // Map service names to their config names
-    const serviceToConfigMap: { [key: string]: string } = {
-      claude: "claude",
-      cline: "cline",
-      "roo-cline": "roo-cline",
-      windsurf: "windsurf",
-      witsy: "witsy",
-      enconvo: "enconvo",
-    };
-
-    const configName = serviceToConfigMap[normalizedServiceName];
-    if (!configName) {
-      return false;
-    }
-
-    return await configureMcpServer(configName);
-  });
-
-  // Add terms and conditions handler
-  ipcMain.handle("fetch-terms", async () => {
-    try {
-      const terms = await fetchTermsAndConditions();
-      return terms;
-    } catch (error) {
-      console.error("Error fetching terms:", error);
-      throw error;
-    }
-  });
-
   // Register model config handlers
   ipcMain.handle("getModelConfigs", async () => {
     return await readModelConfigs();
@@ -978,6 +961,27 @@ app.whenReady().then(() => {
 
   ipcMain.handle("deleteModelConfig", async (_, provider: string, configKey: string) => {
     return await deleteModelConfig(provider, configKey);
+  });
+
+  ipcMain.handle("configure-mcp", async (_, serviceName) => {
+    
+    const normalizedServiceName = serviceName.toLowerCase() as keyof typeof serviceToConfigMap;
+    // Map service names to their config names
+    const serviceToConfigMap = {
+        claude: "claude",
+        cline: "cline",
+        "roo-cline": "roo-cline",
+        windsurf: "windsurf",
+        witsy: "witsy",
+        enconvo: "enconvo",
+        cursor: "cursor",
+    };
+    const configName = serviceToConfigMap[normalizedServiceName];
+    if (!configName) {
+        console.error(`Unknown service name: ${serviceName}`);
+        return false;
+    }
+    return await configureMcpServer(configName);
   });
 
   // Then create the window
