@@ -1,7 +1,7 @@
 import { SetupStep } from "../../types";
 
 export interface StreamChunk {
-  type: string; // may kill
+  type: "content" | "tool_name" | "tool_args" | "tool_result" | "new_raw_llm_messages";
   content: string;
   tool_name: string;
   tool_args: string;

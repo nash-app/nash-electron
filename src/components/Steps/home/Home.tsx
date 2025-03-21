@@ -244,7 +244,16 @@ const useChatInteraction = (
   };
 };
 
+interface ChatLifecycleState {
+  contentRecentlyFinished: boolean,
+  toolNameRecentlyFinished: boolean,
+  toolArgsRecentlyFinished: boolean,
+  toolResultRecentlyFinished: boolean,
+  rawLLMMessagesRecentlyFinished: boolean,
+}
+
 export function Home({ onNavigate }: ChatProps): React.ReactElement {
+ // KEEP THIS START:
   const [input, setInput] = useState("");
   const [configAlerts, setConfigAlerts] = useState<ConfigAlert[]>([]);
   const [generalErrors, setGeneralErrors] = useState<ConfigAlert[]>([]);
@@ -254,8 +263,21 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
   );
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  const chatState = useChatState();
-  
+
+const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>({
+  contentRecentlyFinished: false,
+  toolNameRecentlyFinished: false,
+  toolArgsRecentlyFinished: false,
+  toolResultRecentlyFinished: false,
+  rawLLMMessagesRecentlyFinished: false,
+});
+
+ // we'll want to set the messages for the ui & the server
+// setMessagesForUi 
+// setMessagesForServer 
+
+
+
   // Handle dismissing general errors
   const handleDismissError = (id: string) => {
     setGeneralErrors((prev) => prev.filter((error) => error.id !== id));
@@ -280,14 +302,9 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       },
     ]);
   };
-  
-  const { handleSubmit, handleStop, isSubmitting } = useChatInteraction(
-    selectedModel, 
-    chatState,
-    addGeneralError
-  );
 
-  // Load configured providers on mount
+
+    // Load configured providers on mount
   useEffect(() => {
     const loadConfiguredProviders = async () => {
       try {
@@ -353,6 +370,21 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
       }
     }
   }, [selectedModel, configuredProviders]);
+// KEEP THIS END:
+
+
+
+
+
+
+
+  const chatState = useChatState();
+  
+  const { handleSubmit, handleStop, isSubmitting } = useChatInteraction(
+    selectedModel, 
+    chatState,
+    addGeneralError
+  );
 
   return (
     <div className="flex flex-col h-full">
