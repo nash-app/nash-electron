@@ -2,11 +2,11 @@ import { SetupStep } from "../../types";
 
 export interface StreamChunk {
   type: "content" | "tool_name" | "tool_args" | "tool_result" | "new_raw_llm_messages";
-  content: string;
-  tool_name: string;
-  tool_args: string;
-  tool_result: string;
-  new_raw_llm_messages: string; // "[role: user, "
+  content: string | null;
+  tool_name: string | null;
+  tool_args: string | null;
+  tool_result: string | null;
+  new_raw_llm_messages: LLMMessage[] | null;
 }
 
 export interface StreamSnapshot {

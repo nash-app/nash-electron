@@ -39,11 +39,11 @@ import {
 import anthropicIcon from "../../../../public/models/anthropic.png";
 import openAIIcon from "../../../../public/models/openai.png";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessageUI, ChatProps, ConfigAlert, LLMMessage } from "./types";
+import { ChatMessageUI, ChatProps, ConfigAlert, LLMMessage, StreamChunk, NashLLMMessage, ToolUse, ToolResult, TextContent } from "./types";
 import { ModelSelector } from "./components/ModelSelector";
 import { ChatMessages } from "./components/ChatMessages";
 import { ConfigAlerts } from "./components/ConfigAlerts";
-import { ALL_MODELS } from "./constants";
+import { ALL_MODELS, DEFAULT_BASE_URLS } from "./constants";
 import { streamCompletion  } from "./chatService";
 
 interface FunctionCall {
@@ -93,36 +93,209 @@ const getProviderConfig = async (modelId: string) => {
 
   return {
     key,
-    baseUrl: config?.baseUrl,
+    baseUrl: config?.baseUrl || DEFAULT_BASE_URLS[model.provider],
     model: modelId,
     provider: model.provider,
   };
 };
 
+interface ChatLifecycleState {
+  contentRecentlyFinished: boolean,
+  toolNameRecentlyFinished: boolean,
+  toolArgsRecentlyFinished: boolean,
+  toolResultRecentlyFinished: boolean,
+  rawLLMMessagesRecentlyFinished: boolean,
+}
+
 // Custom hook for managing chat state
 const useChatState = () => {
-  const [messages, setMessages] = useState<ChatMessageUI[]>([]);
+  const [messagesForUI, setMessagesForUI] = useState<NashLLMMessage[]>([]);
   const [messagesForLLM, setMessagesForLLM] = useState<LLMMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  const [currentStreamSnapshot, setCurrentStreamSnapshot] = useState<{
+    content: string | null;
+    toolName: string | null;
+    toolArgs: string | null;
+    toolResult: string | null;
+    toolUseId: string | null;
+  }>({
+    content: null,
+    toolName: null,
+    toolArgs: null,
+    toolResult: null,
+    toolUseId: null,
+  });
 
-  const addMessage = useCallback((message: ChatMessageUI) => {
-    setMessages((prev) => [...prev, message]);
+  const addUserMessage = useCallback((message: string) => {
+    const userMessage: NashLLMMessage = {
+      id: uuidv4(),
+      role: "user",
+      content: message,
+      timestamp: new Date(),
+      isStreaming: false,
+    };
+
+    // Add message to UI messages
+    setMessagesForUI(prev => [...prev, userMessage]);
+    
+    // Add message to LLM messages
+    setMessagesForLLM(prev => [...prev, {
+      role: "user",
+      content: message,
+    }]);
   }, []);
 
-  const updateLastMessage = useCallback(
-    (updater: (message: ChatMessageUI) => ChatMessageUI) => {
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        const lastMessage = newMessages[newMessages.length - 1];
-        if (lastMessage) {
-          newMessages[newMessages.length - 1] = updater(lastMessage);
+  const addAssistantMessage = useCallback(() => {
+    const assistantMessage: NashLLMMessage = {
+      id: uuidv4(),
+      role: "assistant",
+      content: "",
+      timestamp: new Date(),
+      isStreaming: true,
+    };
+
+    setMessagesForUI(prev => [...prev, assistantMessage]);
+    return assistantMessage.id;
+  }, []);
+
+  const updateMessage = useCallback((messageId: string, updater: (message: NashLLMMessage) => NashLLMMessage) => {
+    setMessagesForUI(prev => {
+      return prev.map(msg => {
+        if (msg.id === messageId) {
+          return updater(msg);
         }
-        return newMessages;
+        return msg;
       });
-    },
-    []
-  );
+    });
+  }, []);
+
+  const updateAssistantMessageWithStreamChunk = useCallback((messageId: string, chunk: StreamChunk, chatLifecycleState: ChatLifecycleState) => {
+    // Handle content chunk
+    if (chunk.content) {
+      setCurrentStreamSnapshot(prev => ({
+        ...prev,
+        content: (prev.content || "") + chunk.content,
+      }));
+      
+      updateMessage(messageId, (msg) => {
+        const currentContent = typeof msg.content === 'string' ? msg.content : "";
+        return {
+          ...msg,
+          content: currentContent + chunk.content,
+        };
+      });
+    }
+
+    // Handle tool name chunk
+    if (chunk.tool_name) {
+      // Generate a tool use ID if we don't have one yet
+      const toolUseId = currentStreamSnapshot.toolUseId || `toolu_${uuidv4()}`;
+      
+      setCurrentStreamSnapshot(prev => ({
+        ...prev,
+        toolName: chunk.tool_name,
+        toolUseId: toolUseId,
+      }));
+      
+      updateMessage(messageId, (msg) => {
+        // Convert string content to array if needed
+        const currentContent = Array.isArray(msg.content) 
+          ? msg.content 
+          : typeof msg.content === 'string' && msg.content
+            ? [{ 
+                type: "text" as const, 
+                tool_use_id: toolUseId,
+                content: msg.content 
+              }] 
+            : [];
+        
+        // Check if we're already building a tool use
+        const hasToolUse = currentContent.some(item => 
+          item.type === "tool_use" && item.tool_use_id === toolUseId
+        );
+        
+        // If no tool use yet, add one
+        if (!hasToolUse) {
+          currentContent.push({
+            type: "tool_use" as const,
+            tool_use_id: toolUseId,
+            name: chunk.tool_name,
+            input: {},
+          } as ToolUse);
+        }
+        
+        return {
+          ...msg,
+          content: currentContent,
+        };
+      });
+    }
+
+    // Handle tool args chunk
+    if (chunk.tool_args && currentStreamSnapshot.toolUseId) {
+      let parsedArgs = {};
+      try {
+        parsedArgs = JSON.parse(chunk.tool_args);
+      } catch (e) {
+        console.error("Failed to parse tool args:", e);
+      }
+      
+      setCurrentStreamSnapshot(prev => ({
+        ...prev,
+        toolArgs: chunk.tool_args,
+      }));
+      
+      updateMessage(messageId, (msg) => {
+        if (!Array.isArray(msg.content)) return msg;
+        
+        return {
+          ...msg,
+          content: msg.content.map(item => {
+            if (item.type === "tool_use" && item.tool_use_id === currentStreamSnapshot.toolUseId) {
+              return {
+                ...item,
+                input: parsedArgs,
+              };
+            }
+            return item;
+          }),
+        };
+      });
+    }
+
+    // Handle tool result chunk
+    if (chunk.tool_result && currentStreamSnapshot.toolUseId) {
+      setCurrentStreamSnapshot(prev => ({
+        ...prev,
+        toolResult: chunk.tool_result,
+      }));
+      
+      // For tool results, we typically create a new user message
+      const toolResultMessage: NashLLMMessage = {
+        id: uuidv4(),
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: currentStreamSnapshot.toolUseId!,
+          content: chunk.tool_result,
+        }],
+        timestamp: new Date(),
+        isStreaming: false,
+      };
+      
+      setMessagesForUI(prev => [...prev, toolResultMessage]);
+    }
+
+    // Handle new raw LLM messages
+    if (chunk.new_raw_llm_messages) {
+      console.log("chunk.new_raw_llm_messages", chunk.new_raw_llm_messages);
+      // According to updated types, new_raw_llm_messages is now LLMMessage[] | null
+      if (Array.isArray(chunk.new_raw_llm_messages) && chunk.new_raw_llm_messages.length > 0) {
+        setMessagesForLLM(prev => [...prev, ...chunk.new_raw_llm_messages]);
+      }
+    }
+  }, [currentStreamSnapshot, updateMessage]);
 
   const toggleToolExpand = useCallback((messageId: string) => {
     setExpandedTools((prev) => ({
@@ -132,18 +305,31 @@ const useChatState = () => {
   }, []);
 
   const clearMessages = useCallback(() => {
-    setMessages([]);
+    setMessagesForUI([]);
+    setMessagesForLLM([]);
     setSessionId(null);
+    setCurrentStreamSnapshot({
+      content: null,
+      toolName: null,
+      toolArgs: null,
+      toolResult: null,
+      toolUseId: null,
+    });
   }, []);
 
   return {
-    messages,
-    setMessages,
+    messagesForUI,
+    setMessagesForUI,
+    messagesForLLM,
+    setMessagesForLLM,
     sessionId,
     setSessionId,
     expandedTools,
-    addMessage,
-    updateLastMessage,
+    currentStreamSnapshot,
+    addUserMessage,
+    addAssistantMessage,
+    updateMessage,
+    updateAssistantMessageWithStreamChunk,
     toggleToolExpand,
     clearMessages,
   };
@@ -156,8 +342,58 @@ const useChatInteraction = (
   onError: (message: string) => void
 ) => {
   const abortControllerRef = useRef<AbortController | null>(null);
-  const currentContentRef = useRef("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>({
+    contentRecentlyFinished: false,
+    toolNameRecentlyFinished: false,
+    toolArgsRecentlyFinished: false,
+    toolResultRecentlyFinished: false,
+    rawLLMMessagesRecentlyFinished: false,
+  });
+
+  // Update chat lifecycle state based on chunk
+  const updateChatLifecycleState = useCallback((chunk: StreamChunk) => {
+    setChatLifecycleState(prev => {
+      const newState = { ...prev };
+      
+      // Track content completion
+      if (chunk.content !== null) {
+        newState.contentRecentlyFinished = true;
+      } else if (prev.contentRecentlyFinished) {
+        newState.contentRecentlyFinished = false;
+      }
+      
+      // Track tool name completion
+      if (chunk.tool_name !== null) {
+        newState.toolNameRecentlyFinished = true;
+      } else if (prev.toolNameRecentlyFinished) {
+        newState.toolNameRecentlyFinished = false;
+      }
+      
+      // Track tool args completion
+      if (chunk.tool_args !== null) {
+        newState.toolArgsRecentlyFinished = true;
+      } else if (prev.toolArgsRecentlyFinished) {
+        newState.toolArgsRecentlyFinished = false;
+      }
+      
+      // Track tool result completion
+      if (chunk.tool_result !== null) {
+        newState.toolResultRecentlyFinished = true;
+      } else if (prev.toolResultRecentlyFinished) {
+        newState.toolResultRecentlyFinished = false;
+      }
+      
+      // Track raw LLM messages completion
+      if (chunk.new_raw_llm_messages !== null) {
+        newState.rawLLMMessagesRecentlyFinished = true;
+      } else if (prev.rawLLMMessagesRecentlyFinished) {
+        newState.rawLLMMessagesRecentlyFinished = false;
+      }
+      
+      return newState;
+    });
+  }, []);
 
   const handleStop = useCallback(() => {
     if (abortControllerRef.current) {
@@ -172,51 +408,112 @@ const useChatInteraction = (
       if (!input.trim() || !selectedModel) {
         return;
       }
-
+      console.log("selectedModel", selectedModel);
       setIsSubmitting(true);
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      const userMessage: ChatMessageUI = {
-        id: uuidv4(),
+      console.log("user's message", input.trim());
+      
+      // Create the user message object
+      const userMessage: LLMMessage = {
         role: "user",
-        content: input.trim(),
-        timestamp: new Date(),
+        content: input.trim()
       };
-
-      const assistantMessage: ChatMessageUI = {
-        id: uuidv4(),
-        role: "assistant",
-        content: "",
-        timestamp: new Date(),
-        isStreaming: true,
-      };
-
-      chatState.addMessage(userMessage);
-      chatState.addMessage(assistantMessage);
-      currentContentRef.current = "";
-
+      
+      // Add user message to UI immediately
+      chatState.addUserMessage(input.trim());
+      
+      // Create assistant message placeholder
+      const assistantMessageId = chatState.addAssistantMessage();
+      const providerConfig = await getProviderConfig(selectedModel);
+      
+      // Build messages array directly instead of relying on state update
+      const messagesForRequest = [...chatState.messagesForLLM, userMessage];
+      console.log("messagesForRequest", messagesForRequest);
+      
       try {
-        await streamCompletion(
-          [...chatState.messages, userMessage, assistantMessage],
-          chatState.sessionId,
-          controller.signal,
-          (chunk, newSessionId) => {
-            if (newSessionId) {
-              chatState.setSessionId(newSessionId);
-              return;
-            }
-            chatState.updateLastMessage((msg) => ({
-              ...msg,
-              content: (msg.content || "") + chunk,
-            }));
+        // Setup connection to stream from server
+        const response = await fetch(NASH_LOCAL_SERVER_CHAT_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-          selectedModel,
-          chatState.setMessages
-        );
+          body: JSON.stringify({
+            messages: messagesForRequest,
+            model: selectedModel,
+            api_key: providerConfig.key,
+            api_base_url: providerConfig.baseUrl || DEFAULT_BASE_URLS[providerConfig.provider],
+            provider: providerConfig.provider,
+            session_id: chatState.sessionId || undefined,
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("Failed to get response reader");
+        }
+
+        let partialLine = "";
+        
+        // Process streaming response
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) {
+            break;
+          }
+          
+          // Decode chunk and split into lines
+          const chunk = new TextDecoder().decode(value);
+          const lines = (partialLine + chunk).split("\n");
+          partialLine = lines.pop() || "";
+          
+          for (const line of lines) {
+            if (!line.trim() || !line.startsWith("data: ")) {
+              continue;
+            }
+            
+            const data = line.substring(6);
+            
+            // Check for stream end
+            if (data === "[DONE]") {
+              // Mark message as no longer streaming
+              chatState.updateMessage(assistantMessageId, msg => ({
+                ...msg,
+                isStreaming: false,
+              }));
+              continue;
+            }
+            
+            try {
+              const event = JSON.parse(data) as StreamChunk & { session_id?: string };
+              
+              // Handle session ID
+              if ("session_id" in event && event.session_id) {
+                chatState.setSessionId(event.session_id);
+                continue;
+              }
+              
+              // Update chat lifecycle state
+              updateChatLifecycleState(event);
+              
+              // Process chunk and update UI
+              chatState.updateAssistantMessageWithStreamChunk(assistantMessageId, event, chatLifecycleState);
+              
+            } catch (error) {
+              console.error("Error processing stream chunk:", error);
+            }
+          }
+        }
       } catch (error) {
         if (error instanceof Error && error.name !== "AbortError") {
-          chatState.updateLastMessage((msg) => ({
+          chatState.updateMessage(assistantMessageId, msg => ({
             ...msg,
             content: "Sorry, there was an error processing your request.",
             isStreaming: false,
@@ -224,7 +521,7 @@ const useChatInteraction = (
           
           onError(error instanceof Error ? error.message : "An unexpected error occurred");
         } else {
-          chatState.updateLastMessage((msg) => ({
+          chatState.updateMessage(assistantMessageId, msg => ({
             ...msg,
             isStreaming: false,
           }));
@@ -234,26 +531,18 @@ const useChatInteraction = (
         setIsSubmitting(false);
       }
     },
-    [selectedModel, chatState, onError]
+    [selectedModel, chatState, onError, chatLifecycleState, updateChatLifecycleState]
   );
 
   return {
     handleSubmit,
     handleStop,
     isSubmitting,
+    chatLifecycleState,
   };
 };
 
-interface ChatLifecycleState {
-  contentRecentlyFinished: boolean,
-  toolNameRecentlyFinished: boolean,
-  toolArgsRecentlyFinished: boolean,
-  toolResultRecentlyFinished: boolean,
-  rawLLMMessagesRecentlyFinished: boolean,
-}
-
 export function Home({ onNavigate }: ChatProps): React.ReactElement {
- // KEEP THIS START:
   const [input, setInput] = useState("");
   const [configAlerts, setConfigAlerts] = useState<ConfigAlert[]>([]);
   const [generalErrors, setGeneralErrors] = useState<ConfigAlert[]>([]);
@@ -262,26 +551,6 @@ export function Home({ onNavigate }: ChatProps): React.ReactElement {
     new Set()
   );
   const chatContainerRef = useRef<HTMLDivElement>(null);
-
-
-const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>({
-  contentRecentlyFinished: false,
-  toolNameRecentlyFinished: false,
-  toolArgsRecentlyFinished: false,
-  toolResultRecentlyFinished: false,
-  rawLLMMessagesRecentlyFinished: false,
-});
-
- // we'll want to set the messages for the ui & the server
-// setMessagesForUi
-// setMessagesForServer 
-
-
-
-  // Handle dismissing general errors
-  const handleDismissError = (id: string) => {
-    setGeneralErrors((prev) => prev.filter((error) => error.id !== id));
-  };
 
   // Add a function to handle errors from chat interactions
   const addGeneralError = (message: string) => {
@@ -303,8 +572,22 @@ const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>
     ]);
   };
 
+  // Initialize chat state
+  const chatState = useChatState();
+  
+  // Initialize chat interaction 
+  const { handleSubmit, handleStop, isSubmitting, chatLifecycleState } = useChatInteraction(
+    selectedModel, 
+    chatState,
+    addGeneralError
+  );
 
-    // Load configured providers on mount
+  // Handle dismissing general errors
+  const handleDismissError = (id: string) => {
+    setGeneralErrors((prev) => prev.filter((error) => error.id !== id));
+  };
+
+  // Load configured providers on mount
   useEffect(() => {
     const loadConfiguredProviders = async () => {
       try {
@@ -370,21 +653,6 @@ const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>
       }
     }
   }, [selectedModel, configuredProviders]);
-// KEEP THIS END:
-
-
-
-
-
-
-
-  const chatState = useChatState();
-  
-  const { handleSubmit, handleStop, isSubmitting } = useChatInteraction(
-    selectedModel, 
-    chatState,
-    addGeneralError
-  );
 
   return (
     <div className="flex flex-col h-full">
@@ -400,7 +668,7 @@ const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>
           autoScroll={true}
         >
           <ChatMessages
-            messages={chatState.messages}
+            messages={chatState.messagesForUI}
             expandedTools={chatState.expandedTools}
             onToggleToolExpand={chatState.toggleToolExpand}
           />
