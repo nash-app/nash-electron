@@ -107,18 +107,26 @@ interface ChatLifecycleState {
   rawLLMMessagesRecentlyFinished: boolean,
 }
 
+// Add this outside of all components to ensure it persists between renders
+let lastContentWasToolResult = false;
+let currentAssistantMessageIdRef: string | null = null;
+
 // Custom hook for managing chat state
 const useChatState = () => {
   const [messagesForUI, setMessagesForUI] = useState<NashLLMMessage[]>([]);
   const [messagesForLLM, setMessagesForLLM] = useState<LLMMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
+  const [hasCreatedAssistantMessageAfterToolResult, setHasCreatedAssistantMessageAfterToolResult] = useState(false);
+  const [toolResultReceived, setToolResultReceived] = useState(false);
   const [currentStreamSnapshot, setCurrentStreamSnapshot] = useState<{
     content: string | null;
     toolName: string | null;
     toolArgs: string | null;
     toolResult: string | null;
     toolUseId: string | null;
+    lastToolUseId?: string;
+    currentAssistantMessageId?: string;
   }>({
     content: null,
     toolName: null,
@@ -147,17 +155,36 @@ const useChatState = () => {
   }, []);
 
   const addAssistantMessage = useCallback(() => {
-    const assistantMessage: NashLLMMessage = {
-      id: uuidv4(),
-      role: "assistant",
-      content: "",
-      timestamp: new Date(),
-      isStreaming: true,
-    };
+    let assistantMessage: NashLLMMessage;
+    
+    // If we have a lastToolUseId from a previous tool interaction,
+    // make sure the new assistant message is associated with it
+    if (currentStreamSnapshot.lastToolUseId) {
+      assistantMessage = {
+        id: uuidv4(),
+        role: "assistant",
+        content: [{
+          type: "text",
+          tool_use_id: currentStreamSnapshot.lastToolUseId,
+          content: ""
+        }],
+        timestamp: new Date(),
+        isStreaming: true,
+      };
+    } else {
+      // Default case - no previous tool interaction
+      assistantMessage = {
+        id: uuidv4(),
+        role: "assistant",
+        content: "",
+        timestamp: new Date(),
+        isStreaming: true,
+      };
+    }
 
     setMessagesForUI(prev => [...prev, assistantMessage]);
     return assistantMessage.id;
-  }, []);
+  }, [currentStreamSnapshot.lastToolUseId]);
 
   const updateMessage = useCallback((messageId: string, updater: (message: NashLLMMessage) => NashLLMMessage) => {
     setMessagesForUI(prev => {
@@ -173,12 +200,104 @@ const useChatState = () => {
   const updateAssistantMessageWithStreamChunk = useCallback((messageId: string, chunk: StreamChunk, chatLifecycleState: ChatLifecycleState) => {
     // Handle content chunk
     if (chunk.content) {
+      console.log("CONTENT CHUNK RECEIVED:", chunk.content, 
+        "lastContentWasToolResult:", lastContentWasToolResult,
+        "toolResultReceived:", toolResultReceived,
+        "toolResultRecentlyFinished:", chatLifecycleState.toolResultRecentlyFinished,
+        "currentAssistantMessageId:", currentStreamSnapshot.currentAssistantMessageId,
+        "currentAssistantMessageIdRef:", currentAssistantMessageIdRef);
+      
+      // Check if we have a tool result and need to create a new assistant message
+      // Now check our direct global flag first
+      if (lastContentWasToolResult) {
+        console.log("CREATING NEW ASSISTANT MESSAGE after tool result - using lastContentWasToolResult flag");
+        
+        // Reset the global flag since we're handling it now
+        lastContentWasToolResult = false;
+        
+        // Create a new ID for the assistant message
+        const newAssistantMessageId = uuidv4();
+        console.log("Created new assistant message with ID:", newAssistantMessageId);
+        
+        // Set the ref to the new ID
+        currentAssistantMessageIdRef = newAssistantMessageId;
+        
+        // Create a new assistant message
+        const newAssistantMessage: NashLLMMessage = {
+          id: newAssistantMessageId,
+          role: "assistant",
+          content: [{
+            type: "text",
+            tool_use_id: currentStreamSnapshot.lastToolUseId!,
+            content: chunk.content
+          }],
+          timestamp: new Date(),
+          isStreaming: true,
+        };
+        
+        // Add the new message to UI
+        setMessagesForUI(prev => [...prev, newAssistantMessage]);
+        
+        // Set current message ID and update content
+        setCurrentStreamSnapshot(prev => ({
+          ...prev,
+          content: chunk.content,
+          currentAssistantMessageId: newAssistantMessageId
+        }));
+        
+        // Reset tool result flag since we've handled it
+        setToolResultReceived(false);
+        
+        // Set flag to indicate we've created a new assistant message
+        setHasCreatedAssistantMessageAfterToolResult(true);
+        
+        return; // Exit early as we've handled this chunk
+      }
+      
       setCurrentStreamSnapshot(prev => ({
         ...prev,
         content: (prev.content || "") + chunk.content,
       }));
       
-      updateMessage(messageId, (msg) => {
+      // Use currentAssistantMessageIdRef if available (for post-tool messages)
+      const targetMessageId = currentAssistantMessageIdRef || messageId;
+      console.log("UPDATING EXISTING MESSAGE:", targetMessageId, 
+        "Is different from original:", targetMessageId !== messageId,
+        "Current content:", typeof currentStreamSnapshot.content === 'string' ? 
+          currentStreamSnapshot.content.substring(0, 20) + '...' : 'none');
+      
+      updateMessage(targetMessageId, (msg) => {
+        // If content is already an array
+        if (Array.isArray(msg.content)) {
+          return {
+            ...msg,
+            content: msg.content.map(item => {
+              // If there's a text item associated with the current tool, update it
+              if (item.type === "text") {
+                return {
+                  ...item,
+                  content: item.content + (chunk.content || "")
+                };
+              }
+              return item;
+            })
+          };
+        }
+        
+        // If we have a lastToolUseId from a previous tool result,
+        // create a proper structured content array with text content
+        if (currentStreamSnapshot.lastToolUseId && typeof msg.content === 'string') {
+          return {
+            ...msg,
+            content: [{
+              type: "text",
+              tool_use_id: currentStreamSnapshot.lastToolUseId,
+              content: (msg.content || "") + (chunk.content || "")
+            }]
+          };
+        }
+        
+        // Default case for string content (no tools involved)
         const currentContent = typeof msg.content === 'string' ? msg.content : "";
         return {
           ...msg,
@@ -266,9 +385,16 @@ const useChatState = () => {
 
     // Handle tool result chunk
     if (chunk.tool_result && currentStreamSnapshot.toolUseId) {
+      console.log("TOOL RESULT CHUNK RECEIVED:", chunk.tool_result);
+      
+      // Set the GLOBAL flag that the last content was a tool result
+      lastContentWasToolResult = true;
+      console.log("SET lastContentWasToolResult = TRUE - should create new message on next content");
+      
       setCurrentStreamSnapshot(prev => ({
         ...prev,
         toolResult: chunk.tool_result,
+        lastToolUseId: currentStreamSnapshot.toolUseId
       }));
       
       // For tool results, we typically create a new user message
@@ -285,6 +411,10 @@ const useChatState = () => {
       };
       
       setMessagesForUI(prev => [...prev, toolResultMessage]);
+      console.log("ADDED TOOL RESULT MESSAGE, expecting next content to create new assistant message");
+      
+      // Still set React state flag to indicate we've just received a tool result
+      setToolResultReceived(true);
     }
 
     // Handle new raw LLM messages
@@ -295,7 +425,13 @@ const useChatState = () => {
         setMessagesForLLM(prev => [...prev, ...chunk.new_raw_llm_messages]);
       }
     }
-  }, [currentStreamSnapshot, updateMessage]);
+
+    // Add debug logs for tracking chunk sequence
+    console.log("CHUNK PROCESSING COMPLETE:", {
+      event: JSON.stringify(chunk).substring(0, 100),
+      lifecycleState: { ...chatLifecycleState }
+    });
+  }, [currentStreamSnapshot, updateMessage, setHasCreatedAssistantMessageAfterToolResult, toolResultReceived]);
 
   const toggleToolExpand = useCallback((messageId: string) => {
     setExpandedTools((prev) => ({
@@ -308,12 +444,17 @@ const useChatState = () => {
     setMessagesForUI([]);
     setMessagesForLLM([]);
     setSessionId(null);
+    setHasCreatedAssistantMessageAfterToolResult(false);
+    setToolResultReceived(false);
+    currentAssistantMessageIdRef = null; // Clear the ref
     setCurrentStreamSnapshot({
       content: null,
       toolName: null,
       toolArgs: null,
       toolResult: null,
       toolUseId: null,
+      lastToolUseId: undefined,
+      currentAssistantMessageId: undefined,
     });
   }, []);
 
@@ -326,6 +467,10 @@ const useChatState = () => {
     setSessionId,
     expandedTools,
     currentStreamSnapshot,
+    hasCreatedAssistantMessageAfterToolResult,
+    setHasCreatedAssistantMessageAfterToolResult,
+    toolResultReceived,
+    setToolResultReceived,
     addUserMessage,
     addAssistantMessage,
     updateMessage,
@@ -353,12 +498,26 @@ const useChatInteraction = (
 
   // Update chat lifecycle state based on chunk
   const updateChatLifecycleState = useCallback((chunk: StreamChunk) => {
+    console.log("INCOMING CHUNK FOR LIFECYCLE:", chunk, "Current state:", chatLifecycleState);
     setChatLifecycleState(prev => {
       const newState = { ...prev };
       
       // Track content completion
       if (chunk.content !== null) {
         newState.contentRecentlyFinished = true;
+        
+        // Only reset toolResultRecentlyFinished when we've created a new assistant message
+        // and we receive another content chunk
+        if (prev.toolResultRecentlyFinished && chatState.hasCreatedAssistantMessageAfterToolResult) {
+          newState.toolResultRecentlyFinished = false;
+          console.log("Reset toolResultRecentlyFinished to FALSE after creating new assistant message", chunk);
+          // Reset the flag
+          chatState.setHasCreatedAssistantMessageAfterToolResult(false);
+        } else if (prev.toolResultRecentlyFinished) {
+          // If we have a content chunk after a tool result but haven't created a new assistant message,
+          // don't reset the toolResultRecentlyFinished flag yet
+          console.log("Content after tool result but haven't created a new message yet - keeping toolResultRecentlyFinished TRUE", chunk);
+        }
       } else if (prev.contentRecentlyFinished) {
         newState.contentRecentlyFinished = false;
       }
@@ -380,8 +539,7 @@ const useChatInteraction = (
       // Track tool result completion
       if (chunk.tool_result !== null) {
         newState.toolResultRecentlyFinished = true;
-      } else if (prev.toolResultRecentlyFinished) {
-        newState.toolResultRecentlyFinished = false;
+        console.log("TOOL RESULT RECEIVED - Setting toolResultRecentlyFinished to TRUE", chunk.tool_result);
       }
       
       // Track raw LLM messages completion
@@ -391,9 +549,14 @@ const useChatInteraction = (
         newState.rawLLMMessagesRecentlyFinished = false;
       }
       
+      // Log any changes to the lifecycle state
+      if (JSON.stringify(prev) !== JSON.stringify(newState)) {
+        console.log("LIFECYCLE STATE CHANGE from:", prev, "to:", newState, "for chunk:", chunk);
+      }
+      
       return newState;
     });
-  }, []);
+  }, [chatState.hasCreatedAssistantMessageAfterToolResult, chatState.setHasCreatedAssistantMessageAfterToolResult, chatLifecycleState]);
 
   const handleStop = useCallback(() => {
     if (abortControllerRef.current) {
@@ -412,6 +575,27 @@ const useChatInteraction = (
       setIsSubmitting(true);
       const controller = new AbortController();
       abortControllerRef.current = controller;
+
+      // Reset the global flag at the start of a new conversation
+      lastContentWasToolResult = false;
+      
+      // Reset the assistant message ID ref
+      currentAssistantMessageIdRef = null;
+      
+      // Reset currentAssistantMessageId
+      console.log("Reset state for new conversation - currentAssistantMessageIdRef:", currentAssistantMessageIdRef);
+
+      // Reset lifecycle state for new interaction
+      setChatLifecycleState({
+        contentRecentlyFinished: false,
+        toolNameRecentlyFinished: false,
+        toolArgsRecentlyFinished: false,
+        toolResultRecentlyFinished: false,
+        rawLLMMessagesRecentlyFinished: false,
+      });
+      
+      // Reset message creation flag for new interaction
+      chatState.setHasCreatedAssistantMessageAfterToolResult(false);
 
       console.log("user's message", input.trim());
       
@@ -469,42 +653,46 @@ const useChatInteraction = (
             break;
           }
           
-          // Decode chunk and split into lines
-          const chunk = new TextDecoder().decode(value);
-          const lines = (partialLine + chunk).split("\n");
+          const chunkText = new TextDecoder().decode(value);
+          partialLine += chunkText;
+          
+          const lines = partialLine.split("\n");
+          
+          // Process all complete lines, keeping the last partial line 
+          // unprocessed until we have the full line
           partialLine = lines.pop() || "";
           
           for (const line of lines) {
-            if (!line.trim() || !line.startsWith("data: ")) {
-              continue;
-            }
-            
-            const data = line.substring(6);
-            
-            // Check for stream end
-            if (data === "[DONE]") {
-              // Mark message as no longer streaming
-              chatState.updateMessage(assistantMessageId, msg => ({
-                ...msg,
-                isStreaming: false,
-              }));
-              continue;
-            }
+            if (line.trim() === "") continue;
             
             try {
-              const event = JSON.parse(data) as StreamChunk & { session_id?: string };
+              const chunk = JSON.parse(line) as StreamChunk & { session_id?: string };
               
-              // Handle session ID
-              if ("session_id" in event && event.session_id) {
-                chatState.setSessionId(event.session_id);
-                continue;
+              // Update lifecycle state with the chunk
+              updateChatLifecycleState(chunk);
+              
+              // Update session ID if available
+              if ('session_id' in chunk && chunk.session_id && !chatState.sessionId) {
+                chatState.setSessionId(chunk.session_id);
               }
               
-              // Update chat lifecycle state
-              updateChatLifecycleState(event);
+              // Update assistant message with the chunk
+              chatState.updateAssistantMessageWithStreamChunk(
+                assistantMessageId, 
+                chunk,
+                chatLifecycleState
+              );
               
-              // Process chunk and update UI
-              chatState.updateAssistantMessageWithStreamChunk(assistantMessageId, event, chatLifecycleState);
+              // Log the current state of important variables for debugging
+              console.log("CHUNK PROCESSED:", {
+                content: chunk.content ? chunk.content.substring(0, 30) + '...' : null,
+                tool_name: chunk.tool_name,
+                tool_result: chunk.tool_result ? "has result" : null,
+                currentAssistantMessageIdRef: currentAssistantMessageIdRef,
+                lifecycleState: { ...chatLifecycleState },
+                toolResultReceived: chatState.toolResultReceived,
+                lastContentWasToolResult: lastContentWasToolResult
+              });
               
             } catch (error) {
               console.error("Error processing stream chunk:", error);
