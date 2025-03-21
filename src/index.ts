@@ -772,11 +772,66 @@ async function startLocalServer() {
 function stopLocalServer() {
   if (!localServerProcess) {
     console.log("Local server is not running");
+    
+    // Even if our process reference is null, double-check if anything is using our port
+    getProcessOnPort(NASH_LOCAL_SERVER_PORT).then(pids => {
+      if (pids.length > 0) {
+        console.log(`Found orphaned processes on port ${NASH_LOCAL_SERVER_PORT}: ${pids.join(', ')}`);
+        pids.forEach(pid => {
+          console.log(`Killing orphaned process ${pid}...`);
+          killProcess(pid);
+        });
+      }
+    });
+    
     return;
   }
 
   console.log("Stopping Local server...");
-  localServerProcess.kill();
+  
+  // Try graceful termination first
+  try {
+    localServerProcess.kill('SIGTERM');
+    
+    // Double check with process ID if available
+    if (localServerProcess.pid) {
+      console.log(`Sent SIGTERM to process ${localServerProcess.pid}...`);
+      exec(`kill -15 ${localServerProcess.pid}`);
+    }
+  } catch (error) {
+    console.error("Error stopping server gracefully:", error);
+  }
+  
+  // After a short delay, force kill if still running
+  setTimeout(() => {
+    try {
+      if (localServerProcess && !localServerProcess.killed) {
+        console.log("Server still running, force killing...");
+        localServerProcess.kill('SIGKILL');
+        
+        if (localServerProcess.pid) {
+          exec(`kill -9 ${localServerProcess.pid}`);
+        }
+      }
+      
+      // Also check for any processes still using our port
+      getProcessOnPort(NASH_LOCAL_SERVER_PORT).then(pids => {
+        if (pids.length > 0) {
+          console.log(`Found processes still using port ${NASH_LOCAL_SERVER_PORT}: ${pids.join(', ')}`);
+          pids.forEach(pid => {
+            console.log(`Force killing process ${pid}...`);
+            killProcess(pid);
+          });
+        }
+      });
+    } catch (error) {
+      console.error("Error force killing server:", error);
+    } finally {
+      localServerProcess = null;
+    }
+  }, 500);
+  
+  // Clear the reference
   localServerProcess = null;
 }
 
@@ -946,8 +1001,10 @@ app.on("before-quit", () => {
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
 app.on("window-all-closed", () => {
+  // Always stop the server when all windows are closed
+  stopLocalServer();
+  
   if (process.platform !== "darwin") {
-    stopLocalServer();
     app.quit();
   }
 });

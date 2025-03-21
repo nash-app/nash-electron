@@ -1,4 +1,4 @@
-import { ChatMessage, ModelConfig } from "./types";
+import {  ModelConfig } from "./types";
 import { ALL_MODELS, DEFAULT_BASE_URLS } from "./constants";
 
 export const getProviderConfig = async (modelId: string) => {

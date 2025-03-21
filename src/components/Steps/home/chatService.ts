@@ -1,4 +1,4 @@
-import { ChatMessage } from "./types";
+import { LLMMessage, ChatMessageUI } from "./types";
 import { NASH_LOCAL_SERVER_CHAT_ENDPOINT } from "../../../constants";
 import {  getProviderConfig } from "./utils";
 import { v4 as uuidv4 } from "uuid";
@@ -13,26 +13,34 @@ import { v4 as uuidv4 } from "uuid";
  * @param setMessages - Function to update message state
  */
 export const streamCompletion = async (
-  messages: ChatMessage[],
+  messages: ChatMessageUI[],
   sessionId: string | null,
   signal: AbortSignal,
   onChunk: (chunk: string, newSessionId?: string) => void,
   modelId: string,
-  setMessages: (updater: (prev: ChatMessage[]) => ChatMessage[]) => void
+  setMessages: (updater: (prev: ChatMessageUI[]) => ChatMessageUI[]) => void
 ) => {
   try {
     // Get provider configuration for the selected model
     const providerConfig = await getProviderConfig(modelId);
 
+    console.log("messages", messages);
+
     // Prepare messages for the API (strip internal properties)
-    const preparedMessages = messages.map((msg) => ({
+    const preparedMessagesForLLM:LLMMessage[] = messages.map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
+
+    // tool restul between 1 & 2
+    // another user message that only has the tool result
+    
+    console.log("preparedMessagesForLLM", preparedMessagesForLLM);
+    
     // Prepare request payload
     const payload = {
-      messages: preparedMessages,
+      messages: preparedMessagesForLLM,
       model: modelId,
       api_key: providerConfig.key,
       api_base_url: providerConfig.baseUrl,
@@ -157,7 +165,7 @@ export const streamCompletion = async (
                 });
 
                 // Add a new message for the tool call
-                const toolCallMessage: ChatMessage = {
+                const toolCallMessage: ChatMessageUI = {
                   id: toolCallId,
                   role: "assistant",
                   content: "",
@@ -271,7 +279,7 @@ export const streamCompletion = async (
               // After tool result, prepare for potential follow-up message
               const followUpMessageId = uuidv4();
               setMessages((prev) => {
-                const followUpMessage: ChatMessage = {
+                const followUpMessage: ChatMessageUI = {
                   id: followUpMessageId,
                   role: "assistant",
                   content: "",

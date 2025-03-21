@@ -9,6 +9,7 @@ import { TaskPage } from "./components/Steps/TaskPage";
 import { Home } from "./components/Steps/home/Home";
 import { Models } from "./components/Steps/Models";
 import { Tools } from "./components/Steps/Tools";
+import { ChatPage } from "./components/Chat/ChatPage";
 import { SetupStep } from "./components/types";
 import { DragHandle } from "./components/DragHandle";
 
@@ -105,6 +106,9 @@ const App: React.FC = () => {
 
       case SetupStep.Tools:
         return <Tools onNavigate={handleNavigate} />;
+
+      case SetupStep.Chat:
+        return <ChatPage onNavigate={handleNavigate} />;
 
       default:
         return <Home onNavigate={handleNavigate} />;

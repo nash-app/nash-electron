@@ -26,7 +26,6 @@ import { ChatContainer } from "../../ui/chat-container";
 import {
   NASH_LOCAL_SERVER_CHAT_ENDPOINT,
   NASH_LOCAL_SERVER_SUMMARIZE_ENDPOINT,
-  NASH_LOCAL_SERVER_MCP_CALL_TOOL_ENDPOINT,
 } from "../../../constants";
 import {
   Select,
@@ -40,7 +39,7 @@ import {
 import anthropicIcon from "../../../../public/models/anthropic.png";
 import openAIIcon from "../../../../public/models/openai.png";
 import { v4 as uuidv4 } from "uuid";
-import { ChatMessage, ChatProps, ConfigAlert } from "./types";
+import { ChatMessageUI, ChatProps, ConfigAlert, LLMMessage } from "./types";
 import { ModelSelector } from "./components/ModelSelector";
 import { ChatMessages } from "./components/ChatMessages";
 import { ConfigAlerts } from "./components/ConfigAlerts";
@@ -102,18 +101,17 @@ const getProviderConfig = async (modelId: string) => {
 
 // Custom hook for managing chat state
 const useChatState = () => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessageUI[]>([]);
+  const [messagesForLLM, setMessagesForLLM] = useState<LLMMessage[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>(
-    {}
-  );
+  const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
 
-  const addMessage = useCallback((message: ChatMessage) => {
+  const addMessage = useCallback((message: ChatMessageUI) => {
     setMessages((prev) => [...prev, message]);
   }, []);
 
   const updateLastMessage = useCallback(
-    (updater: (message: ChatMessage) => ChatMessage) => {
+    (updater: (message: ChatMessageUI) => ChatMessageUI) => {
       setMessages((prev) => {
         const newMessages = [...prev];
         const lastMessage = newMessages[newMessages.length - 1];
@@ -178,14 +176,14 @@ const useChatInteraction = (
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
-      const userMessage: ChatMessage = {
+      const userMessage: ChatMessageUI = {
         id: uuidv4(),
         role: "user",
         content: input.trim(),
         timestamp: new Date(),
       };
 
-      const assistantMessage: ChatMessage = {
+      const assistantMessage: ChatMessageUI = {
         id: uuidv4(),
         role: "assistant",
         content: "",

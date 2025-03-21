@@ -1,6 +1,6 @@
 import * as React from "react";
 import { cn } from "../../../../lib/utils";
-import { ChatMessage } from "../types";
+import { ChatMessageUI } from "../types";
 import { Message, MessageContent } from "../../../ui/message";
 import { Avatar } from "../../../ui/avatar";
 import { Badge } from "../../../ui/badge";
@@ -9,7 +9,7 @@ import nashLogoWhite from "../../../../../public/nash-logo-white.svg";
 import { MarkdownContent } from "./MarkdownContent";
 
 interface ChatMessagesProps {
-  messages: ChatMessage[];
+  messages: ChatMessageUI[];
   expandedTools: Record<string, boolean>;
   onToggleToolExpand: (messageId: string) => void;
 }
@@ -144,13 +144,13 @@ export function ChatMessages({
                 <span className="text-zinc-400">Thinking...</span>
               ) : message.role === "assistant" && message.content ? (
                 <MarkdownContent 
-                  content={message.content} 
+                  content={message.content as any} 
                   className="prose prose-invert max-w-none" 
                 />
               ) : (
                 <div className="prose prose-invert max-w-none">
                   {/* Render user messages as plain text without paragraph wrapping */}
-                  {message.content}
+                  {message.content as any}
                 </div>
               )}
             </div>

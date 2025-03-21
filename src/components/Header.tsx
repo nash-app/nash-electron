@@ -34,6 +34,7 @@ const NAV_ITEMS: Array<{ step: SetupStep; label: string }> = [
   { step: SetupStep.Secrets, label: "Secrets" },
   { step: SetupStep.Services, label: "Apps" },
   { step: SetupStep.Models, label: "Models" },
+  { step: SetupStep.Chat, label: "Chat" },
 ];
 
 export function Header({

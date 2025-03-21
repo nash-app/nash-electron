@@ -6,6 +6,7 @@ export enum SetupStep {
   Home = "home",
   Models = "models",
   Tools = "tools",
+  Chat = "chat",
 }
 
 export interface Service {
