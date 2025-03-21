@@ -273,7 +273,7 @@ const [chatLifecycleState, setChatLifecycleState] = useState<ChatLifecycleState>
 });
 
  // we'll want to set the messages for the ui & the server
-// setMessagesForUi 
+// setMessagesForUi
 // setMessagesForServer 
 
 
