@@ -109,6 +109,8 @@ interface ChatLifecycleState {
 
 // Add this outside of all components to ensure it persists between renders
 let lastContentWasToolResult = false;
+// Add this new module-level variable to track the current message ID
+let currentAssistantMessageIdRef: string | null = null;
 
 // Custom hook for managing chat state
 const useChatState = () => {
@@ -202,11 +204,21 @@ const useChatState = () => {
       console.log("CONTENT CHUNK RECEIVED:", chunk.content, 
         "lastContentWasToolResult:", lastContentWasToolResult,
         "toolResultReceived:", toolResultReceived,
-        "toolResultRecentlyFinished:", chatLifecycleState.toolResultRecentlyFinished);
+        "toolResultRecentlyFinished:", chatLifecycleState.toolResultRecentlyFinished,
+        "currentAssistantMessageId:", currentStreamSnapshot.currentAssistantMessageId,
+        "currentAssistantMessageIdRef:", currentAssistantMessageIdRef);
       
+      // Store the message ID we'll actually use for this update
+      let targetMessageId = messageId;
+      
+      // If we have a module-level reference to current message ID, use that first
+      if (currentAssistantMessageIdRef) {
+        console.log("USING MODULE-LEVEL MESSAGE ID REF:", currentAssistantMessageIdRef);
+        targetMessageId = currentAssistantMessageIdRef;
+      }
       // Check if we have a tool result and need to create a new assistant message
       // Now check our direct global flag first
-      if (lastContentWasToolResult) {
+      else if (lastContentWasToolResult) {
         console.log("CREATING NEW ASSISTANT MESSAGE after tool result - using lastContentWasToolResult flag");
         
         // Reset the global flag since we're handling it now
@@ -214,6 +226,10 @@ const useChatState = () => {
         
         // Create a new ID for the assistant message
         const newAssistantMessageId = uuidv4();
+        targetMessageId = newAssistantMessageId;
+        
+        // Set our module-level reference
+        currentAssistantMessageIdRef = newAssistantMessageId;
         
         // Create a new assistant message
         const newAssistantMessage: NashLLMMessage = {
@@ -257,6 +273,10 @@ const useChatState = () => {
         
         // Create a new ID for the assistant message
         const newAssistantMessageId = uuidv4();
+        targetMessageId = newAssistantMessageId;
+        
+        // Set our module-level reference
+        currentAssistantMessageIdRef = newAssistantMessageId;
         
         // Create a new assistant message
         const newAssistantMessage: NashLLMMessage = {
@@ -286,16 +306,24 @@ const useChatState = () => {
         
         return; // Exit early as we've handled this chunk
       }
+      // If we have a currentAssistantMessageId from a previous creation, use that instead
+      else if (currentStreamSnapshot.currentAssistantMessageId) {
+        targetMessageId = currentStreamSnapshot.currentAssistantMessageId;
+        
+        // Sync with our module-level reference
+        if (!currentAssistantMessageIdRef) {
+          currentAssistantMessageIdRef = currentStreamSnapshot.currentAssistantMessageId;
+        }
+      }
       
       setCurrentStreamSnapshot(prev => ({
         ...prev,
         content: (prev.content || "") + chunk.content,
       }));
       
-      // Use currentAssistantMessageId if available (for post-tool messages)
-      const targetMessageId = currentStreamSnapshot.currentAssistantMessageId || messageId;
       console.log("UPDATING EXISTING MESSAGE:", targetMessageId, 
-        "Is different from original:", targetMessageId !== messageId);
+        "Is different from original:", targetMessageId !== messageId,
+        "Using module-level ref:", targetMessageId === currentAssistantMessageIdRef);
       
       updateMessage(targetMessageId, (msg) => {
         // If content is already an array
@@ -420,7 +448,13 @@ const useChatState = () => {
       
       // Set the GLOBAL flag that the last content was a tool result
       lastContentWasToolResult = true;
+      
+      // Reset our module-level reference when we get a tool result
+      // this ensures the next content chunk creates a new message
+      currentAssistantMessageIdRef = null;
+      
       console.log("SET lastContentWasToolResult = TRUE - should create new message on next content");
+      console.log("RESET currentAssistantMessageIdRef = null");
       
       setCurrentStreamSnapshot(prev => ({
         ...prev,
@@ -486,6 +520,9 @@ const useChatState = () => {
       lastToolUseId: undefined,
       currentAssistantMessageId: undefined,
     });
+    // Reset module-level tracking variables
+    lastContentWasToolResult = false;
+    currentAssistantMessageIdRef = null;
   }, []);
 
   return {
