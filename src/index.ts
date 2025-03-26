@@ -330,7 +330,10 @@ function runInstallScript() {
   return new Promise((resolve, reject) => {
     exec(
       `/bin/bash ${tmpPath} ${NASH_MCP_SERVER_VERSION} ${NASH_LOCAL_SERVER_VERSION}`,
-      { cwd: os.homedir() },
+      { 
+        cwd: os.homedir(),
+        maxBuffer: 100 * 1024 * 1024  // Increase buffer to 100MB
+      },
       (error) => {
         // Clean up temp file
         try {
