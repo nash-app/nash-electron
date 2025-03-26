@@ -1,6 +1,6 @@
 import { ProviderModel } from "./types";
 
-export const NASH_MCP_SERVER_VERSION = "0.1.14";
+export const NASH_MCP_SERVER_VERSION = "0.1.15";
 export const NASH_LOCAL_SERVER_VERSION = "0.1.12";
 export const NASH_MCP_DIR = `nash-mcp-${NASH_MCP_SERVER_VERSION}`;
 
